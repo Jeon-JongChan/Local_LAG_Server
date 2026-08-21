@@ -10,6 +10,9 @@ tools/llama-cpp/
 
 # 별도 git 프로젝트 (이 저장소에서 추적하지 않음)
 tools/labeler/
+scripts/labeler.bat
+scripts/labeler.sh
+tools/colab/labeler_colab.ipynb
 
 # ML 모델 (자동 다운로드, 용량 큼)
 data/models/
