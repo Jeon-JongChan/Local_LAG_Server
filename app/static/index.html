@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>local-rag</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+  <script src="/static/vue.global.prod.js"></script>
+</head>
+<body>
+  <div id="app" v-cloak>
+    <div class="layout" :class="{ 'sidebar-collapsed': !sidebarOpen }">
+      <!-- 사이드바 -->
+      <aside class="sidebar">
+        <div class="sidebar-top">
+          <button type="button" class="btn-new" @click="newChat">
+            <span class="icon">+</span> 새 대화
+          </button>
+          <button type="button" class="btn-icon mobile-only" @click="sidebarOpen = false" title="닫기">×</button>
+        </div>
+        <nav class="session-list">
+          <button
+            v-for="s in sessions"
+            :key="s.id"
+            type="button"
+            class="session-item"
+            :class="{ active: s.id === currentSessionId }"
+            @click="selectSession(s.id)"
+          >
+            <span class="session-title">{{ s.title }}</span>
+            <span
+              class="session-delete"
+              title="삭제"
+              @click.stop="deleteSession(s.id)"
+            >×</span>
+          </button>
+          <p v-if="!sessions.length" class="empty-hint">대화 기록이 없습니다</p>
+        </nav>
+        <div class="sidebar-footer">
+          <span class="brand">local-rag</span>
+          <span class="tag">FAISS · Qwen · BM25</span>
+        </div>
+      </aside>
+
+      <!-- 메인 채팅 -->
+      <main class="main">
+        <header class="topbar">
+          <button type="button" class="btn-icon" @click="sidebarOpen = !sidebarOpen" title="메뉴">☰</button>
+          <h1 class="chat-title">{{ currentTitle }}</h1>
+        </header>
+
+        <div class="messages" ref="messagesEl">
+          <div v-if="!messages.length && !loading" class="welcome">
+            <div class="welcome-icon">💬</div>
+            <h2>무엇이든 물어보세요</h2>
+            <p>문서 기반 RAG — PDF에서 검색한 내용으로 답변합니다.</p>
+            <div class="suggestions">
+              <button
+                v-for="hint in hints"
+                :key="hint"
+                type="button"
+                class="suggestion"
+                @click="useHint(hint)"
+              >{{ hint }}</button>
+            </div>
+          </div>
+
+          <article
+            v-for="msg in messages"
+            :key="msg.id"
+            class="message"
+            :class="msg.role"
+          >
+            <div class="avatar">{{ msg.role === 'user' ? '나' : 'AI' }}</div>
+            <div class="bubble">
+              <div class="bubble-body">{{ parsed(msg).body }}</div>
+              <details v-if="parsed(msg).refs.length" class="refs">
+                <summary>참고 문서 {{ parsed(msg).refs.length }}건</summary>
+                <ul>
+                  <li v-for="(ref, i) in parsed(msg).refs" :key="i">{{ ref }}</li>
+                </ul>
+              </details>
+            </div>
+          </article>
+
+          <article v-if="loading" class="message assistant">
+            <div class="avatar">AI</div>
+            <div class="bubble typing">
+              <span></span><span></span><span></span>
+              <em>{{ loadingLabel }}</em>
+            </div>
+          </article>
+        </div>
+
+        <footer class="composer">
+          <form @submit.prevent="send">
+            <div class="input-wrap">
+              <textarea
+                ref="inputEl"
+                v-model="input"
+                rows="1"
+                placeholder="메시지를 입력하세요…"
+                :disabled="loading"
+                @keydown="onKeydown"
+                @input="resizeInput"
+              ></textarea>
+              <button
+                type="submit"
+                class="btn-send"
+                :disabled="loading || !input.trim()"
+                title="전송"
+              >
+                <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
+                  <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
+                </svg>
+              </button>
+            </div>
+            <div class="composer-tools">
+              <label class="history-toggle" title="이전 대화를 검색·LLM에 포함">
+                <input type="checkbox" v-model="useHistory" :disabled="loading" />
+                <span>이전 대화 이력 포함</span>
+              </label>
+              <label class="mode-select" title="응답 모드">
+                <span>모드</span>
+                <select v-model="thinkMode" :disabled="loading">
+                  <option value="instant">Instant — 빠른 응답</option>
+                  <option value="auto">Auto — 단순 즉시 / 복잡 시 Think</option>
+                  <option value="think">Think — 심층 분석</option>
+                </select>
+              </label>
+            </div>
+            <p class="composer-hint">
+              Enter 전송 · Shift+Enter 줄바꿈 · 질문에 <code>/think</code> <code>/no_think</code> 가능
+            </p>
+          </form>
+        </footer>
+      </main>
+    </div>
+  </div>
+  <script src="/static/app.js"></script>
+</body>
+</html>

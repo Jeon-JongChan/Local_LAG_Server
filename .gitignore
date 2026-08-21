@@ -1,0 +1,40 @@
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# llama.cpp 바이너리 (ensure_llama_server.py 가 자동 다운로드)
+tools/llama-cpp/
+
+# ML 모델 (자동 다운로드, 용량 큼)
+data/models/
+*.gguf
+*.part
+
+# OpenDataLoader 임시 출력 / 거부 PDF
+data/parsed/
+data/rejected/
+
+# 벡터 인덱스 (로컬 생성)
+data/index/
+
+# 라벨링 작업 데이터 (로컬)
+data/labeling/
+
+# 원본 문서 (용량·민감 정보 — 로컬에만 유지)
+data/docs/*
+!data/docs/.gitkeep
+
+# 구 스택 잔재
+data/chroma/
+data/chat.sqlite3
+data/temp/
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.log

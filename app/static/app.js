@@ -1,0 +1,228 @@
+/**
+ * local-rag — Vue 3 ChatGPT 스타일 채팅 UI
+ */
+
+const { createApp, ref, computed, nextTick, onMounted } = Vue;
+
+const REF_MARKER = "\n\n[참고 문서]\n";
+
+function parseAssistantContent(text) {
+  const idx = text.indexOf(REF_MARKER);
+  if (idx === -1) {
+    return { body: text, refs: [] };
+  }
+  const body = text.slice(0, idx).trim();
+  const refs = text
+    .slice(idx + REF_MARKER.length)
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.startsWith("- "))
+    .map((line) => line.slice(2));
+  return { body, refs };
+}
+
+createApp({
+  setup() {
+    const sessions = ref([]);
+    const currentSessionId = ref(null);
+    const messages = ref([]);
+    const input = ref("");
+    const thinkMode = ref("instant");
+    const useHistory = ref(false);
+    const loading = ref(false);
+    const sidebarOpen = ref(window.innerWidth > 768);
+    const messagesEl = ref(null);
+    const inputEl = ref(null);
+
+    const hints = [
+      "DCU 구매규격 요약해줘",
+      "원격검침 자동전환 조건은?",
+      "AMI 운영자 메뉴얼 핵심만",
+    ];
+
+    const currentTitle = computed(() => {
+      const s = sessions.value.find((x) => x.id === currentSessionId.value);
+      return s?.title || "새 대화";
+    });
+
+    const loadingLabel = computed(() => {
+      if (thinkMode.value === "think") {
+        return "임베딩 · 리랭크 · Thinking…";
+      }
+      if (thinkMode.value === "auto") {
+        return "임베딩 · 리랭크 · Auto 생성…";
+      }
+      return "임베딩 · 리랭크 · 생성 중…";
+    });
+
+    function parsed(msg) {
+      if (msg.role !== "assistant") {
+        return { body: msg.content, refs: [] };
+      }
+      return parseAssistantContent(msg.content);
+    }
+
+    async function api(method, path, body) {
+      const opts = { method, headers: { "Content-Type": "application/json" } };
+      if (body !== undefined) {
+        opts.body = JSON.stringify(body);
+      }
+      const res = await fetch(path, opts);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data.error || `HTTP ${res.status}`);
+      }
+      return data;
+    }
+
+    async function loadSessions() {
+      const data = await api("GET", "/api/sessions");
+      sessions.value = data.sessions || [];
+    }
+
+    async function selectSession(id) {
+      currentSessionId.value = id;
+      const data = await api("GET", `/api/sessions/${id}`);
+      messages.value = data.messages || [];
+      if (window.innerWidth <= 768) sidebarOpen.value = false;
+      await scrollBottom();
+    }
+
+    async function newChat() {
+      const data = await api("POST", "/api/sessions", {});
+      sessions.value.unshift(data.session);
+      currentSessionId.value = data.session.id;
+      messages.value = [];
+      input.value = "";
+      if (window.innerWidth <= 768) sidebarOpen.value = false;
+      await nextTick(() => inputEl.value?.focus());
+    }
+
+    async function deleteSession(id) {
+      if (!confirm("이 대화를 삭제할까요?")) return;
+      await api("DELETE", `/api/sessions/${id}`);
+      sessions.value = sessions.value.filter((s) => s.id !== id);
+      if (currentSessionId.value === id) {
+        currentSessionId.value = null;
+        messages.value = [];
+        if (sessions.value.length) {
+          await selectSession(sessions.value[0].id);
+        }
+      }
+    }
+
+    async function scrollBottom() {
+      await nextTick();
+      const el = messagesEl.value;
+      if (el) el.scrollTop = el.scrollHeight;
+    }
+
+    function resizeInput() {
+      const el = inputEl.value;
+      if (!el) return;
+      el.style.height = "auto";
+      el.style.height = Math.min(el.scrollHeight, 200) + "px";
+    }
+
+    function onKeydown(e) {
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        send();
+      }
+    }
+
+    function useHint(text) {
+      input.value = text;
+      resizeInput();
+      inputEl.value?.focus();
+    }
+
+    async function send() {
+      const text = input.value.trim();
+      if (!text || loading.value) return;
+
+      loading.value = true;
+      input.value = "";
+      resizeInput();
+
+      try {
+        if (!currentSessionId.value) {
+          const created = await api("POST", "/api/sessions", {});
+          sessions.value.unshift(created.session);
+          currentSessionId.value = created.session.id;
+        }
+
+        const sid = currentSessionId.value;
+        messages.value.push({
+          id: "tmp-u-" + Date.now(),
+          role: "user",
+          content: text,
+        });
+        await scrollBottom();
+
+        const data = await api("POST", `/api/sessions/${sid}/messages`, {
+          content: text,
+          think_mode: thinkMode.value,
+          use_history: useHistory.value,
+        });
+
+        const idx = sessions.value.findIndex((s) => s.id === sid);
+        if (idx >= 0) {
+          sessions.value[idx] = data.session;
+          const [updated] = sessions.value.splice(idx, 1);
+          sessions.value.unshift(updated);
+        }
+
+        messages.value = messages.value.filter((m) => !String(m.id).startsWith("tmp-"));
+        messages.value.push(data.user_message, data.assistant_message);
+        await scrollBottom();
+      } catch (err) {
+        messages.value.push({
+          id: "err-" + Date.now(),
+          role: "assistant",
+          content: `오류: ${err.message}`,
+        });
+        await scrollBottom();
+      } finally {
+        loading.value = false;
+        await nextTick(() => inputEl.value?.focus());
+      }
+    }
+
+    onMounted(async () => {
+      try {
+        await loadSessions();
+        if (sessions.value.length) {
+          await selectSession(sessions.value[0].id);
+        }
+      } catch (err) {
+        console.error(err);
+      }
+      inputEl.value?.focus();
+    });
+
+    return {
+      sessions,
+      currentSessionId,
+      messages,
+      input,
+      thinkMode,
+      useHistory,
+      loading,
+      loadingLabel,
+      sidebarOpen,
+      messagesEl,
+      inputEl,
+      hints,
+      currentTitle,
+      parsed,
+      newChat,
+      selectSession,
+      deleteSession,
+      send,
+      onKeydown,
+      resizeInput,
+      useHint,
+    };
+  },
+}).mount("#app");
