@@ -44,3 +44,6 @@ Thumbs.db
 .idea/
 .vscode/
 *.log
+
+# AI 보고서
+.docs/
