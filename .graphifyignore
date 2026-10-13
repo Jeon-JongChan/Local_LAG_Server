@@ -1,0 +1,10 @@
+# Graphify ignore patterns
+.git/
+.venv/
+.docs/
+.graphify/
+data/
+tools/llama-cpp/
+tools/labeler/.venv/
+__pycache__/
+*.pyc

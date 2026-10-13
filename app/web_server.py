@@ -20,9 +20,9 @@ from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import unquote
 
-from chat_db import ChatStore
 from query import ask_question
 from settings import WEB_HOST, WEB_PORT
+from storage import get_chat_store
 
 STATIC_ROOT = Path(__file__).resolve().parent / "static"
 
@@ -125,7 +125,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_error(HTTPStatus.NOT_FOUND)
 
     def _api_list_sessions(self) -> None:
-        db = ChatStore()
+        db = get_chat_store()
         try:
             self._send_json(HTTPStatus.OK, {"sessions": db.list_sessions()})
         finally:
@@ -136,7 +136,7 @@ class Handler(BaseHTTPRequestHandler):
         if err:
             return self._send_json(HTTPStatus.BAD_REQUEST, {"error": err})
         title = ((data or {}).get("title") or "새 대화").strip() or "새 대화"
-        db = ChatStore()
+        db = get_chat_store()
         try:
             session = db.create_session(title=title)
             self._send_json(HTTPStatus.CREATED, {"session": session})
@@ -144,7 +144,7 @@ class Handler(BaseHTTPRequestHandler):
             db.close()
 
     def _api_get_session(self, session_id: str) -> None:
-        db = ChatStore()
+        db = get_chat_store()
         try:
             session = db.get_session(session_id)
             if not session:
@@ -158,7 +158,7 @@ class Handler(BaseHTTPRequestHandler):
             db.close()
 
     def _api_delete_session(self, session_id: str) -> None:
-        db = ChatStore()
+        db = get_chat_store()
         try:
             if not db.delete_session(session_id):
                 return self._send_json(HTTPStatus.NOT_FOUND, {"error": "session not found"})
@@ -182,7 +182,7 @@ class Handler(BaseHTTPRequestHandler):
         # 기본 OFF — UI/요청에서 명시적으로 켤 때만 이전 대화 반영
         use_history = bool((data or {}).get("use_history"))
 
-        db = ChatStore()
+        db = get_chat_store()
         try:
             if not db.get_session(session_id):
                 return self._send_json(HTTPStatus.NOT_FOUND, {"error": "session not found"})

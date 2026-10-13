@@ -4,6 +4,7 @@ __pycache__/
 *.py[cod]
 *.egg-info/
 .pytest_cache/
+.env
 
 # llama.cpp 바이너리 (ensure_llama_server.py 가 자동 다운로드)
 tools/llama-cpp/
@@ -47,3 +48,6 @@ Thumbs.db
 
 # AI 보고서
 .docs/
+
+# Graphify
+.graphify/

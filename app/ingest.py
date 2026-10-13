@@ -1,184 +1,156 @@
-"""
-PDF 인제스트 오케스트레이션.
+"""PDF 및 문서 인제스트 오케스트레이션 모듈.
 
 전체 흐름:
-  discover PDF → (full/append/skip 결정) → OpenDataLoader → 청크 → embed → FAISS+SQLite+FTS5
+  discover 문서 -> 변경 감지 (full/append/skip) -> 문서 파서 어댑터 (parsers) -> 청킹 -> 임베딩 어댑터 -> 하이브리드 스토리지 (FAISS+SQLite+FTS5)
 
-CLI: python app/main.py ingest [--reset]
+CLI: python app/main.py ingest [--reset] [--parser opendataloader|pypdf]
 """
 
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from chunker import elements_to_chunks
-from models import current_embed_device, embed_texts
-from pdf_parser import clear_parsed_cache, discover_pdf_files, parse_pdfs_batch
-from progress import IngestProgress
+from embeddings import get_embedding_adapter
+from parsers import clear_parsed_cache, discover_pdf_files, get_document_parser
 from settings import DOCS_DIR, EMBED_MODEL, REJECTED_DIR
-from store import VectorStore
+from storage import RagStorage, get_rag_storage
 
 
 def _embed_label() -> str:
-    """진행률용 짧은 모델명 (Qwen/Qwen3-Embedding-0.6B → Qwen3-Embedding-0.6B)."""
+    """진행률용 짧은 모델명."""
     return EMBED_MODEL.rsplit("/", 1)[-1] or EMBED_MODEL
 
 
 def _file_sig(path: Path) -> Tuple[int, float]:
-    """
-    파일 변경 감지용 시그니처: (바이트 크기, 수정 시각 mtime).
-
-    ingest_manifest 와 비교해 PDF가 바뀌었는지 판단합니다.
-    """
+    """파일 변경 감지용 시그니처: (바이트 크기, 수정 시각 mtime)."""
     st = path.stat()
     return int(st.st_size), float(st.st_mtime)
 
 
 def _rel_key(path: Path) -> str:
-    """
-    data/docs 기준 상대 경로 (POSIX 슬래시).
-
-    예: Windows docs\\a\\b.pdf → "a/b.pdf"
-    """
+    """data/docs 기준 상대 경로 (POSIX 슬래시)."""
     return path.relative_to(DOCS_DIR).as_posix().replace("\\", "/")
 
 
-def _current_manifest(pdfs: List[Path]) -> Dict[str, Tuple[int, float]]:
-    """현재 docs 폴더에 있는 모든 PDF의 rel_path → 시그니처 맵."""
-    return {_rel_key(p): _file_sig(p) for p in pdfs}
-
-
 def _plan_ingest(
-    pdfs: List[Path], store: VectorStore, *, reset: bool
+    pdfs: List[Path], store: RagStorage, *, reset: bool
 ) -> Tuple[str, List[Path]]:
-    """
-    이번 인제스트를 full / append / skip 중 무엇으로 할지 결정합니다.
-
-    Returns:
-        (mode, targets)
-        - mode: "full" | "append" | "skip"
-        - targets: 실제로 parse_pdfs_batch 에 넘길 PDF 목록
-
-    규칙:
-        - reset=True → 무조건 full, 전체 PDF
-        - manifest 와 현재 파일 목록·시그니처 동일 → skip
-        - 파일 삭제·크기/mtime 변경 → full (FAISS 개별 삭제 미지원)
-        - 신규 파일만 추가 → append (신규 PDF만 parse, FAISS에 add)
-    """
+    """인제스트 모드 결정: full | append | skip."""
     if reset:
         return "full", pdfs
-    if not pdfs:
-        return "skip", []
+
     if store.count() == 0:
         return "full", pdfs
 
-    current = _current_manifest(pdfs)
     prev = store.get_manifest()
+    targets: List[Path] = []
+    for p in pdfs:
+        rel = _rel_key(p)
+        sz, mt = _file_sig(p)
+        old = prev.get(rel)
+        if old is None or old[0] != sz or abs(old[1] - mt) > 1e-4:
+            targets.append(p)
 
-    # 완전 동일하면 재인제스트 불필요
-    if current == prev:
+    if not targets:
         return "skip", []
-
-    prev_keys = set(prev)
-    curr_keys = set(current)
-    added = curr_keys - prev_keys       # 새로 생긴 PDF
-    removed = prev_keys - curr_keys     # 삭제된 PDF
-    changed = {
-        k for k in curr_keys & prev_keys if current[k] != prev[k]
-    }  # 크기·mtime 변경
-
-    if removed or changed:
-        return "full", pdfs
-    return "append", [p for p in pdfs if _rel_key(p) in added]
+    return "append", targets
 
 
-def ingest_documents(*, reset: bool = False) -> None:
+def ingest_documents(reset: bool = False, parser_type: Optional[str] = None) -> None:
     """
-    data/docs PDF를 색인하는 메인 진입 함수.
+    data/docs 아래 문서를 탐색하여 변경된 파일만 증분 인제스트합니다.
 
     Args:
-        reset: True 이면 FAISS·SQLite·parsed 캐시 전부 지우고 처음부터 구축
+        reset: True 시 기존 인덱스를 완전히 비우고 전체 재구축
+        parser_type: 'opendataloader' | 'pypdf' (기본: 설정값 또는 opendataloader)
     """
-    DOCS_DIR.mkdir(parents=True, exist_ok=True)
-    pdfs = discover_pdf_files(DOCS_DIR)
-    if not pdfs:
-        raise SystemExit(
-            f"PDF가 없습니다. `{DOCS_DIR}` 에 .pdf 파일을 넣으세요."
-        )
+    from main import IngestProgress
 
-    store = VectorStore()
+    # 1) 파일 탐색
+    pdfs = discover_pdf_files()
+    if not pdfs:
+        print("[ingest] data/docs 에 PDF 가 없습니다.")
+        return
+
+    store = get_rag_storage()
     try:
-        # 1) full / append / skip 결정
+        # 2) 인제스트 모드 판정
         mode, targets = _plan_ingest(pdfs, store, reset=reset)
         if mode == "skip":
-            print(f"[OK] 변경 없음 — 청크 {store.count()}개 유지")
+            print(f"[OK] 변경 없음 - 청크 {store.count()}개 유지")
             return
 
-        # 2) full 이면 기존 인덱스·파싱 캐시 삭제
-        if mode == "full":
+        if mode == "append":
+            print(f"[ingest] 증분 인제스트 — 대상 {len(targets)}/{len(pdfs)}개")
+        else:
             print("[ingest] 전체 재구축")
             store.reset()
             clear_parsed_cache()
             targets = pdfs
 
-        # 3) OpenDataLoader 파싱 → 요소 리스트 (실패 PDF 는 data/rejected 로 분리)
+        # 3) 문서 파서 어댑터를 통한 파싱 실행
+        doc_parser = get_document_parser(parser_type)
         progress = IngestProgress()
-        progress.start_stage(1, "PDF 파싱 (OpenDataLoader)", len(targets))
+        progress.start_stage(1, f"문서 파싱 ({doc_parser.name})", len(targets))
 
         def _pdf_progress(done: int, total: int, detail: str) -> None:
             progress.update(done, total, detail)
 
-        parse_result = parse_pdfs_batch(targets, on_progress=_pdf_progress)
+        parse_result = doc_parser.parse_batch(targets, on_progress=_pdf_progress)
         progress.finish_stage(
             f"요소 {len(parse_result.elements)}개, "
             f"분리 {len(parse_result.quarantined)}개"
         )
         if parse_result.quarantined:
             print(
-                f"[ingest] 문제 PDF {len(parse_result.quarantined)}개 분리 → {REJECTED_DIR}"
+                f"[ingest] 문제 문서 {len(parse_result.quarantined)}개 분리 -> {REJECTED_DIR}"
             )
         elements = parse_result.elements
         if not elements:
             if parse_result.quarantined:
                 raise SystemExit(
-                    f"처리 가능한 PDF가 없습니다. 분리된 파일: {REJECTED_DIR}"
+                    f"처리 가능한 문서가 없습니다. 분리된 파일: {REJECTED_DIR}"
                 )
-            raise SystemExit("추출된 텍스트 요소가 없습니다.")
+            print("[ingest] 추출된 텍스트 요소가 없습니다.")
+            return
 
-        # 4) 요소 → RAG 청크
+        # 4) 청킹
         progress.start_stage(2, "청크 생성", len(elements))
         chunks = elements_to_chunks(elements)
         progress.finish_stage(f"청크 {len(chunks)}개")
         if not chunks:
-            raise SystemExit("생성된 청크가 없습니다.")
+            print("[ingest] 생성된 청크가 없습니다.")
+            return
 
-        # 5) 임베딩 (EMBED_MODEL)
-        progress.start_stage(
-            3, f"임베딩 ({_embed_label()}, {current_embed_device()})", len(chunks)
-        )
+        # 5) 임베딩 생성 (어댑터 템플릿 호출)
+        embedder = get_embedding_adapter()
         texts = [c["text"] for c in chunks]
+        progress.start_stage(
+            3,
+            f"임베딩 ({_embed_label()} · {embedder.device})",
+            len(texts),
+        )
 
         def _embed_progress(done: int, total: int, detail: str) -> None:
             progress.update(done, total, detail)
 
-        embeddings = embed_texts(texts, on_progress=_embed_progress)
+        embeddings = embedder.embed_documents(texts, on_progress=_embed_progress)
         progress.finish_stage(f"벡터 {len(embeddings)}개")
 
-        # 6) FAISS + SQLite 저장
+        # 6) 스토리지 저장 (FAISS + SQLite + FTS5)
         progress.start_stage(4, "인덱스 저장", len(chunks))
         store.add_chunks(chunks, embeddings)
-        progress.finish_stage(f"FAISS·SQLite 반영 완료")
-
-        # 7) manifest 갱신 (격리된 PDF 제외, docs 에 남은 파일만)
-        pdfs = discover_pdf_files(DOCS_DIR)
-        current = _current_manifest(pdfs)
-        for rel, sig in current.items():
+        for p in targets:
+            rel = _rel_key(p)
+            sig = _file_sig(p)
             store.update_manifest(rel, sig[0], sig[1])
+        progress.finish_stage("FAISS·SQLite 반영 완료")
 
         print(
-            f"[OK] ingest 완료 — 청크 {store.count()}개 "
-            f"(모드={mode}, PDF={len(targets)})"
+            f"\n[OK] ingest 완료 — 청크 {store.count()}개 "
+            f"(이번 추가: {len(chunks)}개)"
         )
     finally:
         store.close()
