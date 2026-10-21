@@ -11,10 +11,7 @@ import numpy as np
 
 from .base import BaseVectorStore
 
-try:
-    from settings import FAISS_PATH, INDEX_DIR
-except ModuleNotFoundError:
-    from app.settings import FAISS_PATH, INDEX_DIR
+from settings import FAISS_PATH, INDEX_DIR
 
 
 class FaissVectorStore(BaseVectorStore):

@@ -40,7 +40,7 @@ class TestRerankerFactory(unittest.TestCase):
 
     def test_default_strategy_is_origin(self):
         """기본 전략은 origin이어야 합니다."""
-        reranker = create_reranker()
+        reranker = create_reranker("origin")
         self.assertIsInstance(reranker, OriginReranker)
         self.assertEqual(reranker.backend_name, "origin")
 

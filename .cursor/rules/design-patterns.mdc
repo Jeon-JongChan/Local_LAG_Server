@@ -1,0 +1,57 @@
+---
+description: local-rag 아키텍처 및 디자인 패턴 표준 준수 규칙 (Facade, Factory, Strategy, Adapter, Template Method)
+alwaysApply: true
+---
+
+# local-rag 디자인 패턴 및 코드 구조화 규칙
+
+local-rag 프로젝트는 외부 라이브러리, 하드웨어 런타임, AI 모델의 교체가 잦은 RAG 시스템이므로,
+**파사드(Facade), 팩토리(Factory), 전략(Strategy), 어댑터(Adapter), 템플릿 메서드(Template Method)** 5대 핵심 패턴을 필수로 적용하여 코드를 최적화하고 유지보수성을 극대화합니다.
+
+---
+
+## 1. 5대 핵심 디자인 패턴 적용 원칙
+
+### 1) Facade (파사드 패턴) — 복잡성 캡슐화
+* **원칙**: 다수의 서브시스템, 복합 데이터 스토리지, 다계층 설정 로직에 클라이언트 코드가 직접 접근하지 않고, 단일 진입점 파사드를 통해서만 상호작용합니다.
+* **적용 사례**:
+  - `SettingsFacade` (`app/settings.py`): 시스템 환경변수, `.env`, PROFILE(low/mid/high), 서빙 엔진 프리셋의 복잡한 우선순위 병합을 `settings.get()` 단일 인터페이스로 제공.
+  - `RagStorage` (`app/storage/rag_storage.py`): SQLite 청크/FTS5 메타데이터와 FAISS 벡터 인덱스 간의 동기화 저장/검색을 단일 창구로 캡슐화.
+
+### 2) Factory (팩토리 패턴) — 생성 책임 분리 및 다형성 보장
+* **원칙**: 구체 클래스(Concrete Class)를 클라이언트가 직접 인스턴스화하지 않으며, 팩토리 함수(`get_*`)를 통해 추상 베이스 인터페이스 타입으로 반환받습니다.
+* **적용 사례**:
+  - `get_accelerator_manager(type)` (`app/services/gpu_manager.py`)
+  - `get_serving_adapter(engine)` (`app/serving_engines/factory.py`)
+  - `get_reranker_adapter(strategy)` (`app/rerankers/factory.py`)
+  - `get_embedding_adapter(model, device)` (`app/embeddings/__init__.py`)
+  - `get_document_parser(parser_type)` (`app/parsers/factory.py`)
+* **요구사항**: 팩토리는 싱글톤 캐싱 및 테스트/설정 변경 시 인스턴스를 초기화하는 리셋(`reset_*`) 메서드를 반드시 지원해야 합니다.
+
+### 3) Strategy & Adapter (전략 및 어댑터 패턴) — 런타임 교체 및 외부 격리
+* **원칙**: 외부 라이브러리(PyTorch, HuggingFace, llama.cpp, OpenDataLoader 등)나 하드웨어 환경(CUDA, Vulkan, CPU)의 차이는 `Base*` 추상 클래스로 감싸(Adapter) 내부 도메인과 격리하고, 환경 설정에 따라 자유롭게 갈아끼울 수 있는 구조(Strategy)를 유지합니다.
+* **적용 사례**:
+  - 가속기 전략: `BaseAcceleratorManager` → `CudaAcceleratorManager`, `VulkanAcceleratorManager`, `CpuAcceleratorManager`
+  - 서빙 엔진 어댑터: `BaseServingAdapter` → `OpenAICompatibleServingAdapter`, `OllamaServingAdapter`
+  - 리랭커 어댑터: `BaseRerankerAdapter` → `OriginRerankerAdapter`, `LayaRerankerAdapter`, `ClmRerankerAdapter`
+  - 문서 파서 어댑터: `BaseDocumentParser` → `OpenDataLoaderParserAdapter`, `PyPdfParserAdapter`
+
+### 4) Template Method (템플릿 메서드 패턴) — 실행 흐름 표준화
+* **원칙**: 불변의 공통 실행 흐름(유효성 검증 → 리소스 가용 확인 → 배치 분할 → 핵심 알고리즘 호출 → 후처리 및 진행률 통지)은 `Base*` 부모 클래스의 템플릿 메서드에 정의하고, 하위 클래스는 알고리즘 세부 단계(`_prepare_*`, `_embed_*`, `parse_file` 등)만 오버라이드합니다.
+* **적용 사례**:
+  - `BaseAcceleratorManager.ensure_ready()`: 가용성 검증 → 필요 시 CUDA 런타임 휠 설치 → 최종 확인.
+  - `BaseModelManager.ensure_model()` / `ensure_file()`: 로컬 존재 검증 → 미존재 시 다운로드 → 무결성 검증.
+  - `BaseEngineManager.ensure_running()`: 프로세스 활성 검증 → 미기동 시 바이너리 확보 → 프로세스 기동.
+  - `BaseEmbeddingAdapter.embed_documents()`: 입력 검증 → 배치 슬라이싱 → 서브클래스 배치 인코딩 → 진행률 콜백.
+
+---
+
+## 2. 신규 기능 작성 시 필수 체크리스트
+
+1. **독자적인 날것(Raw) 유틸 함수 지양**:
+   - 단순히 `def do_something()` 형식으로 파일을 만들지 않고, 하드웨어·엔진·모델·스토리지와 관련된 기능은 상응하는 `Base*` 인터페이스를 정의하거나 상속합니다.
+2. **단일 진실 원천(Source of Truth) 준수**:
+   - 하드웨어 및 런타임 디바이스는 `ACCELERATOR`를 단일 기준으로 삼으며, 파생 변수(`EMBED_DEVICE` 등)로 파편화하지 않습니다.
+3. **오류 안전망 및 자동 치유(Auto-healing)**:
+   - 템플릿 메서드 내에서 누락된 바이너리, 잘못된 버전, 손상된 인터프리터 바인딩을 자동으로 감지하고 복구할 수 있는 흐름을 설계합니다.
+

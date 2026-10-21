@@ -15,14 +15,23 @@ REQ="requirements.txt"
 
 echo "[reinstall_venv] 프로젝트: $ROOT"
 
-# --- 현재 머신 Python ---
-if command -v python3 >/dev/null 2>&1; then
-  PY="$(python3 -c 'import sys; print(sys.executable)')"
-elif command -v python >/dev/null 2>&1; then
-  PY="$(python -c 'import sys; print(sys.executable)')"
-else
-  echo "[reinstall_venv] ERROR: PATH 에 python3 / python 이 없습니다."
-  exit 1
+# --- Python 찾기: tools/python 우선, 없으면 PATH ---
+PY=""
+for cand in "$ROOT"/tools/python/cpython-*/bin/python3 "$ROOT/tools/python/bin/python3" "$ROOT/tools/python/python3"; do
+  if [[ -x "$cand" ]] && "$cand" -c "import sys" >/dev/null 2>&1; then
+    PY="$cand"
+    break
+  fi
+done
+if [[ -z "$PY" ]]; then
+  if command -v python3 >/dev/null 2>&1; then
+    PY="$(python3 -c 'import sys; print(sys.executable)')"
+  elif command -v python >/dev/null 2>&1; then
+    PY="$(python -c 'import sys; print(sys.executable)')"
+  else
+    echo "[reinstall_venv] ERROR: tools/python 또는 PATH 에 python3 / python 이 없습니다."
+    exit 1
+  fi
 fi
 
 NEW_VER="$("$PY" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"

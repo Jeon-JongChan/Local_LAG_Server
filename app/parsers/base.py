@@ -13,10 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-try:
-    from settings import DOCS_DIR, PARSED_DIR, REJECTED_DIR
-except ModuleNotFoundError:
-    from app.settings import DOCS_DIR, PARSED_DIR, REJECTED_DIR
+from settings import DOCS_DIR, PARSED_DIR, REJECTED_DIR
 
 ProgressCallback = Callable[[int, int, str], None]
 _SKIP_DOC_DIR_NAMES = frozenset({"_rejected", "rejected"})

@@ -1,8 +1,8 @@
-"""
-RAG 전용 통합 스토리지 파사드 모듈.
+"""RAG 통합 스토리지 Facade.
 
-VectorStore(FAISS Dense)와 ChunkStore(SQLite FTS5 BM25)를 결합하여
-하이브리드 검색 및 RRF 랭크 융합 파이프라인을 단일 인터페이스로 제공합니다.
+VectorStore(FAISS) + ChunkStore(SQLite FTS5) 서브시스템을 감춰
+search / search_bm25 / add_chunks 단일 인터페이스를 제공한다.
+RRF 융합(rrf_fuse)은 순수 함수로 파사드 옆에 둔다.
 """
 
 from __future__ import annotations

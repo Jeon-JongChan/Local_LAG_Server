@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>local-rag · 관리자</title>
+  <link rel="stylesheet" href="/static/admin.css" />
+</head>
+<body>
+  <header class="bar">
+    <div>
+      <h1>관리자</h1>
+      <p class="muted">모델·엔진 현황 · 질의 구간 시간</p>
+    </div>
+    <div class="bar-actions">
+      <button type="button" id="btn-refresh">새로고침</button>
+      <a class="link" href="/">← 채팅</a>
+    </div>
+  </header>
+
+  <section class="config" id="config">
+    <p class="muted">불러오는 중…</p>
+  </section>
+
+  <section class="feed">
+    <h2>최근 질의 <span class="muted" id="feed-count"></span></h2>
+    <div id="feed"></div>
+    <p class="muted empty" id="feed-empty" hidden>아직 기록이 없습니다. 채팅에서 질문하면 여기에 쌓입니다.</p>
+  </section>
+
+  <script src="/static/admin.js"></script>
+</body>
+</html>

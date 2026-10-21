@@ -14,9 +14,17 @@ fi
 #  1. 모델 및 리랭커 설정
 # ============================================================
 export EMBED_MODEL="${EMBED_MODEL:-Qwen/Qwen3-Embedding-0.6B}"
-# 리랭커 전략: origin (기본, Qwen) | laya (Laya Multilingual) | clm (Contrastive-LM)
-export RERANK_STRATEGY="${RERANK_STRATEGY:-origin}"
+# 리랭커: origin=Qwen 로컬 | laya=laya 패키지 | clm=외부 clm-serve
+export RERANK_STRATEGY="${RERANK_STRATEGY:-laya}"
 export RERANK_MODEL="${RERANK_MODEL:-Qwen/Qwen3-Reranker-0.6B}"
+export RERANK_LAYA_MODEL="${RERANK_LAYA_MODEL:-convaiinnovations/laya-multilingual}"
+export RERANK_CLM_BASE_URL="${RERANK_CLM_BASE_URL:-http://127.0.0.1:8700}"
+case "$RERANK_STRATEGY" in
+  laya) RERANK_LABEL="laya (${RERANK_LAYA_MODEL})" ;;
+  clm) RERANK_LABEL="clm (${RERANK_CLM_BASE_URL})" ;;
+  *) RERANK_LABEL="origin (${RERANK_MODEL})" ;;
+esac
+export LLAMA_CPP_BASE_URL="${LLAMA_CPP_BASE_URL:-http://localhost:8080/v1}"
 # 최종 선별 청크 수 (0으로 설정 시 리랭킹 스킵)
 export RERANK_TOP_K="${RERANK_TOP_K:-4}"
 export FAISS_TOP_K="${FAISS_TOP_K:-8}"
@@ -38,11 +46,29 @@ export LLAMA_NGL="${LLAMA_NGL:-999}"
 export WEB_PORT="${WEB_PORT:-8787}"
 
 py() {
-  if [[ -x "$ROOT/.venv/bin/python" ]]; then
-    "$ROOT/.venv/bin/python" "$@"
-  else
-    python3 "$@"
+  if [[ -n "${PYTHON_EXE:-}" ]] && "$PYTHON_EXE" -c "import sys" >/dev/null 2>&1; then
+    "$PYTHON_EXE" "$@"
+    return $?
   fi
+  if [[ -x "$ROOT/.venv/bin/python" ]] && "$ROOT/.venv/bin/python" -c "import sys" >/dev/null 2>&1; then
+    "$ROOT/.venv/bin/python" "$@"
+    return $?
+  fi
+  for cand in "$ROOT"/tools/python/cpython-*/bin/python3 "$ROOT/tools/python/bin/python3" "$ROOT/tools/python/python3"; do
+    if [[ -x "$cand" ]] && "$cand" -c "import sys" >/dev/null 2>&1; then
+      "$cand" "$@"
+      return $?
+    fi
+  done
+  if command -v python3 >/dev/null 2>&1 && python3 -c "import sys" >/dev/null 2>&1; then
+    python3 "$@"
+    return $?
+  elif command -v python >/dev/null 2>&1 && python -c "import sys" >/dev/null 2>&1; then
+    python "$@"
+    return $?
+  fi
+  echo "[local-rag] [ERROR] 실행 가능한 Python 인터프리터를 찾을 수 없습니다 (tools/python, .venv, PATH)." >&2
+  exit 1
 }
 
 ensure_ml_embed() { py app/main.py setup --embed-only; }
@@ -54,20 +80,20 @@ usage() {
 
   ./scripts/local-rag.sh [serve|ingest|ask|llama|models|benchmark|test]
     serve      웹 UI 실행 (기본값)
-    ingest     PDF 문서 인제스트 및 벡터 색인
+    ingest     PDF 문서 인제스트 및 벡터 색인 (옵션: --fresh 캐시 초기화)
     ask        터미널에서 직접 질문 질의
     llama      llama-server 설치 및 기동만 실행
-    models     임베딩 및 리랭커 모델 다운로드만 실행
+    models     임베딩 다운로드 (origin이면 Qwen 리랭커도)
     benchmark  리랭커 3종(origin/laya/clm) 성능 및 가용성 측정
     test       단위 테스트 실행 (scripts/tests)
 
   [주요 옵션 환경 변수]
-    RERANK_STRATEGY   : origin (기본, Qwen) | laya (Multilingual) | clm (Contrastive-LM)
+    RERANK_STRATEGY   : origin (Qwen 로컬) | laya (파이썬 패키지, 프로세스 안) | clm (외부 clm-serve)
     RERANK_TOP_K      : 4 (최종 선별 청크 수, 0=리랭킹 끄기)
-    LLAMA_CPP_VARIANT : vulkan (iGPU 범용) | cuda (NVIDIA) | cpu (CPU 전용)
+    LLAMA_CPP_VARIANT : auto (ACCELERATOR 추종) | cuda (NVIDIA) | vulkan (iGPU 범용) | cpu (CPU 전용)
     LLAMA_NGL         : 999 (GPU 전량 오프로드) | 0 (CPU 전용)
 
-  현재 설정: EMBED=${EMBED_MODEL}  RERANK=${RERANK_MODEL} [${RERANK_STRATEGY}]  ENGINE=${LLAMA_CPP_VARIANT:-auto}
+  현재 설정: EMBED=${EMBED_MODEL}  RERANK=${RERANK_LABEL}  ENGINE=${SERVING_ENGINE}
 
 EOF
 }
@@ -78,8 +104,12 @@ case "$ACTION" in
   serve)
     ensure_ml_ready || echo "[경고] 임베딩·리랭커 준비 실패 - 질의가 실패할 수 있습니다."
     ensure_llama_ready || echo "[경고] llama-server 준비 실패 - 웹 UI만 기동합니다."
-    echo "[local-rag] 웹 UI: port=${WEB_PORT}  llama=${LLAMA_CPP_BASE_URL:-http://localhost:8080/v1}"
-    echo "[local-rag] 모델: CHAT=${LLAMA_GGUF_FILE}  EMBED=${EMBED_MODEL}  RERANK=${RERANK_MODEL} [${RERANK_STRATEGY}]"
+    if [ "$SERVING_ENGINE" = "llama.cpp" ]; then
+      echo "[local-rag] 웹 UI: port=${WEB_PORT}  SERVING=llama.cpp (${LLAMA_CPP_BASE_URL}) · data/serving_engines"
+    else
+      echo "[local-rag] 웹 UI: port=${WEB_PORT}  SERVING=${SERVING_ENGINE} · 외부 서버"
+    fi
+    echo "[local-rag] 모델: CHAT=${LLAMA_GGUF_FILE}  EMBED=${EMBED_MODEL}  RERANK=${RERANK_LABEL}"
     py app/main.py serve
     ;;
   benchmark)
@@ -96,7 +126,8 @@ case "$ACTION" in
       exit 1
     fi
     echo "[local-rag] PDF 인제스트 시작 (EMBED=${EMBED_MODEL}, PARSER=${DOC_PARSER})"
-    py app/main.py ingest --reset --parser "${DOC_PARSER}"
+    shift
+    py app/main.py ingest --reset --parser "${DOC_PARSER}" "$@"
     ;;
   ask)
     if ! ensure_ml_ready; then echo "[오류] 모델 준비 실패"; exit 1; fi

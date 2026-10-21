@@ -9,22 +9,13 @@ from typing import Any, Dict, List, Sequence, Tuple
 
 from .base import BaseRerankerAdapter
 
-try:
-    from settings import (
-        RERANK_MODELS_DIR,
-        RERANK_ORIGIN_DEVICE,
-        RERANK_ORIGIN_MODEL,
-        RERANK_ORIGIN_SCORER,
-        hf_model_dir,
-    )
-except ModuleNotFoundError:
-    from app.settings import (
-        RERANK_MODELS_DIR,
-        RERANK_ORIGIN_DEVICE,
-        RERANK_ORIGIN_MODEL,
-        RERANK_ORIGIN_SCORER,
-        hf_model_dir,
-    )
+from settings import (
+    RERANK_MODELS_DIR,
+    RERANK_ORIGIN_DEVICE,
+    RERANK_ORIGIN_MODEL,
+    RERANK_ORIGIN_SCORER,
+    hf_model_dir,
+)
 
 
 def _resolve_device() -> str:

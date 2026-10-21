@@ -3,11 +3,14 @@
 
 제공:
   - GET  /, /static/*           → Vue 채팅 UI
+  - GET  /admin                 → 관리자(모델·질의 구간 시간)
+  - GET  /api/admin             → 설정 스냅샷 + 최근 질의 트레이스
   - GET  /api/sessions          → 대화 목록
   - POST /api/sessions          → 새 대화
   - GET  /api/sessions/{id}     → 대화 + 메시지
   - DELETE /api/sessions/{id}   → 대화 삭제
   - POST /api/sessions/{id}/messages → 질문 전송 (RAG)
+  - GET  /api/query/live        → 진행 중 단계 로그
 """
 
 from __future__ import annotations
@@ -20,7 +23,13 @@ from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import unquote
 
-from query import ask_question
+from query import (
+    ask_question,
+    ask_question_detailed,
+    get_live_query,
+    get_runtime_config,
+    list_query_traces,
+)
 from settings import WEB_HOST, WEB_PORT
 from storage import get_chat_store
 
@@ -50,7 +59,11 @@ class Handler(BaseHTTPRequestHandler):
     """HTTP 요청 1건을 처리하는 핸들러 (스레드마다 인스턴스 생성)."""
 
     def log_message(self, fmt: str, *args) -> None:
-        print(f"[web] {self.address_string()} {fmt % args}")
+        """액세스 로그. 진행 표시 폴링은 질문 1건에 수십 번이라 생략."""
+        line = fmt % args
+        if "/api/query/live" in line:
+            return
+        print(f"[web] {self.address_string()} {line}")
 
     def _send_json(self, status: int, payload: dict) -> None:
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -77,6 +90,15 @@ class Handler(BaseHTTPRequestHandler):
 
         if path in ("/", "/index.html"):
             return self._send_file(STATIC_ROOT / "index.html")
+
+        if path in ("/admin", "/admin.html"):
+            return self._send_file(STATIC_ROOT / "admin.html")
+
+        if path == "/api/admin":
+            return self._api_admin()
+
+        if path == "/api/query/live":
+            return self._send_json(HTTPStatus.OK, get_live_query())
 
         if path == "/api/sessions":
             return self._api_list_sessions()
@@ -123,6 +145,16 @@ class Handler(BaseHTTPRequestHandler):
         if m and not m.group(2):
             return self._api_delete_session(m.group(1))
         self.send_error(HTTPStatus.NOT_FOUND)
+
+    def _api_admin(self) -> None:
+        """현재 모델/엔진 설정 + 최근 질의 구간 시간 피드."""
+        self._send_json(
+            HTTPStatus.OK,
+            {
+                "config": get_runtime_config(),
+                "traces": list_query_traces(60),
+            },
+        )
 
     def _api_list_sessions(self) -> None:
         db = get_chat_store()
@@ -189,7 +221,7 @@ class Handler(BaseHTTPRequestHandler):
 
             prior = db.list_messages(session_id) if use_history else None
             user_msg = db.add_message(session_id, "user", content)
-            answer = ask_question(
+            answer, trace = ask_question_detailed(
                 content,
                 think_mode=think_mode,
                 history=prior,
@@ -203,6 +235,7 @@ class Handler(BaseHTTPRequestHandler):
                     "session": session,
                     "user_message": user_msg,
                     "assistant_message": assistant_msg,
+                    "trace": trace,
                 },
             )
         finally:
@@ -215,23 +248,22 @@ class Handler(BaseHTTPRequestHandler):
         question = ((data or {}).get("question") or "").strip()
         if not question:
             return self._send_json(HTTPStatus.BAD_REQUEST, {"error": "question required"})
-        answer = ask_question(question)
-        self._send_json(HTTPStatus.OK, {"answer": answer})
+        answer, trace = ask_question_detailed(question)
+        self._send_json(HTTPStatus.OK, {"answer": answer, "trace": trace})
 
 
 def run_server(host: str | None = None, port: int | None = None) -> None:
-    import os
-
-    from settings import EMBED_MODEL, LLAMA_CPP_BASE_URL, RERANK_MODEL
+    """웹 서버 기동. 배너 값은 SettingsFacade 경유 상수를 쓴다."""
+    from settings import EMBED_MODEL, LLAMA_GGUF_FILE, rerank_label, serving_label
 
     h = host or WEB_HOST
     p = port or WEB_PORT
-    chat = os.getenv("LLAMA_GGUF_FILE", "").strip() or "(환경변수 LLAMA_GGUF_FILE 없음)"
+    chat = LLAMA_GGUF_FILE or "(LLAMA_GGUF_FILE 미설정)"
     print(f"[web] http://{h}:{p}")
     print(f"[web] CHAT={chat}")
     print(f"[web] EMBED={EMBED_MODEL}")
-    print(f"[web] RERANK={RERANK_MODEL}")
-    print(f"[web] llama-server={LLAMA_CPP_BASE_URL}")
+    print(f"[web] RERANK={rerank_label()}")
+    print(f"[web] SERVING={serving_label()}")
     server = ThreadingHTTPServer((h, p), Handler)
     try:
         server.serve_forever()

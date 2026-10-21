@@ -1,27 +1,20 @@
-"""서빙 엔진(Serving Engines) 어댑터 패키지."""
+"""서빙 엔진 패키지.
 
-from .base import BaseServingAdapter, ThinkMode
-from .exllamav3 import ExLlamaV3ServingAdapter
-from .factory import get_serving_adapter, reset_serving_adapters
-from .llama_cpp import LlamaCppServingAdapter
-from .llamafile import LlamafileServingAdapter
-from .mlc_llm import MlcLlmServingAdapter
+Strategy(엔진 선택) + Adapter(외부 HTTP API 래핑) + Template(generate).
+"""
+
+from .airllm import AirLLMServingAdapter
+from .base import BaseServingAdapter
+from .factory import canonical_engine, get_serving_adapter, reset_serving_adapters
 from .ollama import OllamaServingAdapter
 from .openai_compatible import OpenAICompatibleServingAdapter
-from .sglang import SglangServingAdapter
-from .vllm import VllmServingAdapter
 
 __all__ = [
+    "AirLLMServingAdapter",
     "BaseServingAdapter",
-    "ThinkMode",
+    "canonical_engine",
     "get_serving_adapter",
     "reset_serving_adapters",
-    "LlamaCppServingAdapter",
     "OllamaServingAdapter",
-    "VllmServingAdapter",
-    "SglangServingAdapter",
-    "ExLlamaV3ServingAdapter",
-    "MlcLlmServingAdapter",
-    "LlamafileServingAdapter",
     "OpenAICompatibleServingAdapter",
 ]

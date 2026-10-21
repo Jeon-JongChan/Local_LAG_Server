@@ -9,18 +9,11 @@ import requests
 
 from .base import BaseRerankerAdapter, RerankerUnavailableError
 
-try:
-    from settings import (
-        RERANK_CLM_ACTION_CACHE,
-        RERANK_CLM_BASE_URL,
-        RERANK_CLM_TIMEOUT,
-    )
-except ModuleNotFoundError:
-    from app.settings import (
-        RERANK_CLM_ACTION_CACHE,
-        RERANK_CLM_BASE_URL,
-        RERANK_CLM_TIMEOUT,
-    )
+from settings import (
+    RERANK_CLM_ACTION_CACHE,
+    RERANK_CLM_BASE_URL,
+    RERANK_CLM_TIMEOUT,
+)
 
 
 class CLMRerankerAdapter(BaseRerankerAdapter):

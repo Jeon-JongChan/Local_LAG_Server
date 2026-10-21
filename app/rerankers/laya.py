@@ -1,24 +1,21 @@
 """
 laya 리랭커 어댑터 구현체 (Laya Multilingual).
+
+laya 라이브러리가 미설치된 경우 자동 치유(Auto-healing)를 통해 pip 설치를 시도합니다.
 """
 
 from __future__ import annotations
 
+import subprocess
+import sys
 from typing import Any, Dict, List, Sequence
 from .base import BaseRerankerAdapter, RerankerUnavailableError
 
-try:
-    from settings import (
-        RERANK_LAYA_DECISION,
-        RERANK_LAYA_MAX_LENGTH,
-        RERANK_LAYA_MODEL,
-    )
-except ModuleNotFoundError:
-    from app.settings import (
-        RERANK_LAYA_DECISION,
-        RERANK_LAYA_MAX_LENGTH,
-        RERANK_LAYA_MODEL,
-    )
+from settings import (
+    RERANK_LAYA_DECISION,
+    RERANK_LAYA_MAX_LENGTH,
+    RERANK_LAYA_MODEL,
+)
 
 
 class LayaRerankerAdapter(BaseRerankerAdapter):
@@ -43,12 +40,24 @@ class LayaRerankerAdapter(BaseRerankerAdapter):
 
         try:
             import laya
-        except ImportError as exc:
-            raise RerankerUnavailableError(
-                f"[laya] 'laya' 라이브러리가 설치되어 있지 않습니다.\n"
-                f"설치 명령: pip install laya\n"
-                f"원인: {exc}"
-            ) from exc
+        except ImportError:
+            print(
+                "[laya] 'laya' 라이브러리가 미설치되어 있어 자동 설치를 진행합니다 (pip install laya)...",
+                flush=True,
+            )
+            cmd = [sys.executable, "-m", "pip", "install", "laya"]
+            res = subprocess.run(cmd)
+            if res.returncode == 0:
+                try:
+                    import laya
+                except ImportError as exc2:
+                    raise RerankerUnavailableError(
+                        f"[laya] 라이브러리 설치 후 임포트 실패: {exc2}"
+                    ) from exc2
+            else:
+                raise RerankerUnavailableError(
+                    f"[laya] 라이브러리 자동 설치 실패 (pip exit code {res.returncode})"
+                )
 
         try:
             print(f"[laya] Laya 모델 로드 중: {self.model_id}", flush=True)
@@ -56,15 +65,13 @@ class LayaRerankerAdapter(BaseRerankerAdapter):
             return self._agent
         except Exception as exc:
             raise RerankerUnavailableError(
-                f"[laya] 모델 로드 실패: {self.model_id} — {exc}"
+                f"[laya] 모델 로드 실패: {self.model_id} - {exc}"
             ) from exc
 
-    def _score_single(self, agent: Any, query: str, doc_text: str) -> float:
-        truncated_doc = doc_text[: self.max_length] if len(doc_text) > self.max_length else doc_text
-        state = {"query": query, "document": truncated_doc}
-
+    def _build_questions(self) -> Dict[str, Dict[str, Any]]:
+        """Laya 결정 프롬프트 질의 정의 생성."""
         if self.decision_method == "choice":
-            questions = {
+            return {
                 "relevance": {
                     "type": "choice",
                     "instructions": "Determine if the document provides direct evidence for the query.",
@@ -74,20 +81,21 @@ class LayaRerankerAdapter(BaseRerankerAdapter):
                     },
                 }
             }
-        else:
-            questions = {
-                "is_relevant": {
-                    "type": "noul",
-                    "instructions": "Does this document contain factual evidence that answers the query?",
-                }
+        return {
+            "is_relevant": {
+                "type": "noul",
+                "instructions": "Does this document contain factual evidence that answers the query?",
             }
+        }
 
-        res = agent.predict(state, questions)
-        answers = res.get("answers", {}) if isinstance(res, dict) else {}
-
+    def _extract_score(self, answers: Dict[str, Any]) -> float:
+        """Laya 응답에서 관련도 점수(0.0 ~ 1.0) 추출."""
         if self.decision_method == "choice":
             rel_res = answers.get("relevance", {})
             if isinstance(rel_res, dict):
+                probs = rel_res.get("probabilities", {})
+                if isinstance(probs, dict) and "relevant" in probs:
+                    return float(probs["relevant"])
                 return float(rel_res.get("relevant", 0.0))
             return 1.0 if str(rel_res).lower() == "relevant" else 0.0
         else:
@@ -95,7 +103,10 @@ class LayaRerankerAdapter(BaseRerankerAdapter):
             if isinstance(val, (int, float)):
                 return float(val)
             if isinstance(val, dict):
-                return float(val.get("prob", val.get("yes", 0.0)))
+                for key in ("noul", "prob", "probability", "yes", "score"):
+                    if key in val and isinstance(val[key], (int, float)):
+                        return float(val[key])
+                return 0.0
             return 1.0 if str(val).lower() in ("yes", "true", "1") else 0.0
 
     def _calculate_scores(
@@ -103,16 +114,43 @@ class LayaRerankerAdapter(BaseRerankerAdapter):
         query: str,
         candidates: Sequence[Dict[str, Any]],
     ) -> List[float]:
+        if not candidates:
+            return []
         agent = self._ensure_loaded()
-        scores: List[float] = []
+        questions = self._build_questions()
+
+        states = []
         for cand in candidates:
             text = str(cand.get("text") or "")
+            truncated = (
+                text[: self.max_length]
+                if len(text) > self.max_length
+                else text
+            )
+            states.append({"query": query, "document": truncated})
+
+        # predict_batch 지원 시 한 번의 포워드 패스로 고속 처리
+        if hasattr(agent, "predict_batch"):
             try:
-                score = self._score_single(agent, query, text)
+                results = agent.predict_batch(states, questions)
+                return [
+                    self._extract_score(
+                        r.get("answers", {}) if isinstance(r, dict) else {}
+                    )
+                    for r in results
+                ]
+            except Exception as e:
+                print(f"[laya] 배치 점수화 실패, 순차 처리로 대체: {e}", flush=True)
+
+        scores: List[float] = []
+        for state in states:
+            try:
+                res = agent.predict(state, questions)
+                answers = res.get("answers", {}) if isinstance(res, dict) else {}
+                scores.append(self._extract_score(answers))
             except Exception as e:
                 print(f"[laya] 개별 청크 점수화 오류: {e}", flush=True)
-                score = 0.0
-            scores.append(score)
+                scores.append(0.0)
         return scores
 
     def close(self) -> None:

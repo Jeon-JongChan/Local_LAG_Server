@@ -20,20 +20,40 @@ set "REQ=requirements.txt"
 
 echo [reinstall_venv] 프로젝트: %CD%
 
-rem --- 현재 머신 Python 찾기 ---
+rem --- Python 찾기: tools\python 우선 탐색 후 시스템 PATH ---
 set "PY="
-where py >nul 2>&1
-if not errorlevel 1 (
-  for /f "delims=" %%i in ('py -3 -c "import sys; print(sys.executable)" 2^>nul') do set "PY=%%i"
+for /d %%I in ("tools\python\cpython-*") do (
+  if not defined PY if exist "%%~fI\python.exe" (
+    "%%~fI\python.exe" -c "import sys" >nul 2>&1
+    if not errorlevel 1 set "PY=%%~fI\python.exe"
+  )
+)
+if not defined PY if exist "tools\python\python.exe" (
+  "tools\python\python.exe" -c "import sys" >nul 2>&1
+  if not errorlevel 1 set "PY=%CD%\tools\python\python.exe"
+)
+if not defined PY (
+  where py >nul 2>&1
+  if not errorlevel 1 (
+    for /f "delims=" %%i in ('py -3 -c "import sys; print(sys.executable)" 2^>nul') do (
+      "%%i" -c "import sys" >nul 2>&1
+      if not errorlevel 1 set "PY=%%i"
+    )
+  )
 )
 if not defined PY (
   where python >nul 2>&1
   if not errorlevel 1 (
-    for /f "delims=" %%i in ('python -c "import sys; print(sys.executable)" 2^>nul') do set "PY=%%i"
+    for /f "delims=" %%i in ('where python 2^>nul') do (
+      if not defined PY (
+        "%%i" -c "import sys" >nul 2>&1
+        if not errorlevel 1 set "PY=%%i"
+      )
+    )
   )
 )
 if not defined PY (
-  echo [reinstall_venv] ERROR: PATH 에 python / py 가 없습니다.
+  echo [reinstall_venv] ERROR: tools\python 또는 PATH 에 유효한 python / py 가 없습니다.
   exit /b 1
 )
 

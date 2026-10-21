@@ -38,7 +38,7 @@
         </nav>
         <div class="sidebar-footer">
           <span class="brand">local-rag</span>
-          <span class="tag">FAISS · Qwen · BM25</span>
+          <a class="tag" href="/admin" title="모델·구간 시간">관리자</a>
         </div>
       </aside>
 
@@ -86,8 +86,13 @@
           <article v-if="loading" class="message assistant">
             <div class="avatar">AI</div>
             <div class="bubble typing">
-              <span></span><span></span><span></span>
-              <em>{{ loadingLabel }}</em>
+              <div class="typing-row">
+                <span></span><span></span><span></span>
+                <em>{{ liveLines.length ? liveLines[liveLines.length - 1] : loadingLabel }}</em>
+              </div>
+              <ul v-if="liveLines.length" class="live-steps">
+                <li v-for="(line, i) in liveLines" :key="i">{{ line }}</li>
+              </ul>
             </div>
           </article>
         </div>

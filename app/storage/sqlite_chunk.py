@@ -12,10 +12,7 @@ from typing import Any, Dict, List, Optional
 
 from .base import BaseChunkStore
 
-try:
-    from settings import INDEX_DIR, SQLITE_PATH
-except ModuleNotFoundError:
-    from app.settings import INDEX_DIR, SQLITE_PATH
+from settings import INDEX_DIR, SQLITE_PATH
 
 _TOKEN_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/\-]*|[가-힣]+")
 

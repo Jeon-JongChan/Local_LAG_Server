@@ -12,10 +12,7 @@ from typing import Any, Dict, Iterator, List, Optional
 
 from .base import BaseDocumentParserAdapter
 
-try:
-    from settings import OPENDATALOADER_FORMAT, PARSED_DIR
-except ModuleNotFoundError:
-    from app.settings import OPENDATALOADER_FORMAT, PARSED_DIR
+from settings import OPENDATALOADER_FORMAT, PARSED_DIR
 
 TEXT_ELEMENT_TYPES = frozenset(
     {"paragraph", "heading", "list", "list_item", "caption", "footnote"}

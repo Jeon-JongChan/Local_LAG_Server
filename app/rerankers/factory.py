@@ -1,6 +1,9 @@
-"""리랭커 어댑터 팩토리 모듈.
+"""리랭커 팩토리.
 
-전략('origin', 'laya', 'clm')에 따라 적합한 BaseRerankerAdapter 서브클래스 인스턴스를 생성하고 관리합니다.
+Strategy: RERANK_STRATEGY 로 origin | laya | clm 선택.
+각 구현은 외부 모델/API 를 감싸는 Adapter 이기도 하며,
+공통 정렬·메타데이터는 Template(rerank) 이 담당한다.
+인스턴스는 전략 단위로 캐시(전환 시 이전 close).
 """
 
 from __future__ import annotations
@@ -8,10 +11,7 @@ from __future__ import annotations
 from typing import Optional
 from .base import BaseRerankerAdapter, RerankerError
 
-try:
-    from settings import RERANK_STRATEGY
-except ModuleNotFoundError:
-    from app.settings import RERANK_STRATEGY
+from settings import RERANK_STRATEGY, rerank_label
 
 _active_adapter: Optional[BaseRerankerAdapter] = None
 _active_strategy: Optional[str] = None
@@ -48,7 +48,8 @@ def get_reranker_adapter(strategy: Optional[str] = None) -> BaseRerankerAdapter:
         _active_adapter = None
         _active_strategy = None
 
-    print(f"[reranker_factory] 리랭커 어댑터 초기화: {target_strategy}", flush=True)
+    label = rerank_label() if target_strategy == RERANK_STRATEGY else target_strategy
+    print(f"[reranker] 초기화: {label}", flush=True)
 
     if target_strategy == "origin":
         from .origin import OriginRerankerAdapter

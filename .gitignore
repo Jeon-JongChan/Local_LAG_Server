@@ -5,9 +5,13 @@ __pycache__/
 *.egg-info/
 .pytest_cache/
 .env
+scripts/tests
 
-# llama.cpp 바이너리 (ensure_llama_server.py 가 자동 다운로드)
+# llama.cpp 바이너리 (ensure_binary 자동 다운로드, 포터블 기본 경로)
+data/serving_engines/
 tools/llama-cpp/
+tools/python/
+tools/uv/
 
 # 별도 git 프로젝트 (이 저장소에서 추적하지 않음)
 tools/labeler/
@@ -46,8 +50,9 @@ Thumbs.db
 .vscode/
 *.log
 
-# AI 보고서
+# AI 문서
 .docs/
+.agents
 
 # Graphify
 .graphify/

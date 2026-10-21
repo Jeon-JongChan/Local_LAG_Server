@@ -30,6 +30,8 @@ createApp({
     const thinkMode = ref("instant");
     const useHistory = ref(false);
     const loading = ref(false);
+    const liveLines = ref([]);
+    let liveTimer = null;
     const sidebarOpen = ref(window.innerWidth > 768);
     const messagesEl = ref(null);
     const inputEl = ref(null);
@@ -137,11 +139,32 @@ createApp({
       inputEl.value?.focus();
     }
 
+    function startLivePoll() {
+      liveLines.value = [];
+      clearInterval(liveTimer);
+      liveTimer = setInterval(async () => {
+        try {
+          const data = await api("GET", "/api/query/live");
+          liveLines.value = data.lines || [];
+          await scrollBottom();
+        } catch {
+          /* 폴링 실패는 다음 주기에 재시도 */
+        }
+      }, 1500);
+    }
+
+    function stopLivePoll() {
+      clearInterval(liveTimer);
+      liveTimer = null;
+      liveLines.value = [];
+    }
+
     async function send() {
       const text = input.value.trim();
       if (!text || loading.value) return;
 
       loading.value = true;
+      startLivePoll();
       input.value = "";
       resizeInput();
 
@@ -184,6 +207,7 @@ createApp({
         });
         await scrollBottom();
       } finally {
+        stopLivePoll();
         loading.value = false;
         await nextTick(() => inputEl.value?.focus());
       }
@@ -210,6 +234,7 @@ createApp({
       useHistory,
       loading,
       loadingLabel,
+      liveLines,
       sidebarOpen,
       messagesEl,
       inputEl,

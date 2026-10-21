@@ -1,7 +1,4 @@
-"""
-SQLite 기반 대화 세션 저장소 어댑터 구현체.
-기존 chat_db.py의 세션/메시지 관리 규약과 100% 호환됩니다.
-"""
+"""SQLite 기반 대화 세션 저장소 어댑터."""
 
 from __future__ import annotations
 
@@ -13,10 +10,7 @@ from typing import Any, Dict, List, Optional
 
 from .base import BaseChatStore
 
-try:
-    from settings import INDEX_DIR, SQLITE_PATH
-except ModuleNotFoundError:
-    from app.settings import INDEX_DIR, SQLITE_PATH
+from settings import INDEX_DIR, SQLITE_PATH
 
 
 def _utc_now() -> str:

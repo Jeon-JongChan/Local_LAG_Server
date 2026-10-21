@@ -34,13 +34,13 @@ pip install -r requirements.txt
 
 ### llama-server
 
-`scripts\local-rag.bat` 가 **llama-server 미실행 시** 자동으로:
+`scripts\local-rag.bat` / setup이 **SERVING_ENGINE=llama.cpp** 이고 서버가 없으면 자동으로:
 
-1. GitHub에서 llama.cpp Windows zip 다운로드 → `tools/llama-cpp/`
-2. Hugging Face에서 GGUF 다운로드 → `data/models/`（기본: **Qwen3.5 9B Q4**, Ollama `qwen3.5:9b` 대응）
-3. 새 창에서 `llama-server` 기동
+1. GitHub에서 llama.cpp zip 다운로드 → `data/serving_engines/llama-cpp/`（예전 `tools/llama-cpp/` 있으면 그대로 사용）
+2. Hugging Face에서 GGUF 다운로드 → `data/models/chat/`（기본: **Qwen3.5 9B Q4**）
+3. `llama-server` 기동
 
-배치 맨 위 `LLAMA_GGUF_REPO` / `LLAMA_GGUF_FILE`, `LLAMA_CPP_VARIANT`(vulkan/cuda/cpu) 로 조정합니다.
+다른 엔진(Ollama 등)은 외부 설치·기동이 필요합니다. `LLAMA_CPP_VARIANT`(vulkan/cuda/cpu)로 바이너리 종류를 고릅니다.
 
 수동 실행 예:
 
@@ -55,7 +55,7 @@ llama-server -m path\to\qwen.gguf --port 8080 -c 4096
 | 변수 | 기본값 | 설명 |
 |------|--------|------|
 | `EMBED_MODEL` | `Qwen/Qwen3-Embedding-0.6B` | 임베딩 |
-| `RERANK_MODEL` | `Qwen/Qwen3-Reranker-0.6B` | 리랭커 |
+| `RERANK_STRATEGY` | `origin` / `laya` / `clm` | 리랭크 방식. `RERANK_MODEL`은 origin(Qwen)일 때만 사용 |
 | `FAISS_TOP_K` | `20` | dense 검색 후보 |
 | `BM25_TOP_K` | `20` | BM25 후보 |
 | `HYBRID_BM25` | `1` | dense+BM25 RRF (`0`이면 dense만) |
@@ -106,14 +106,14 @@ Linux llama 기본 빌드는 `cpu`(NVIDIA면 `vulkan`). 공식 Ubuntu 릴리스�
 | `embeddings/Qwen3-Embedding-0.6B/` | 임베딩 |
 | `reranker/Qwen3-Reranker-0.6B/` | 리랭커 |
 
-없으면 `local-rag.bat` / `ensure_ml_models.py` / `app/models.py` 가 Hugging Face에서 자동 다운로드합니다.
+없으면 `python app/main.py setup` 또는 `local-rag.bat` 이 Hugging Face에서 자동 다운로드합니다.
 
 ### 웹 API (요약)
 
 - 주력: `GET/POST /api/sessions`, `GET/DELETE /api/sessions/{id}`, `POST /api/sessions/{id}/messages` (`content`, `think_mode`)
 - 레거시: `POST /api/ask` — `{"question"}` → `{"answer"}` (세션·히스토리 없음)
 
-상세 스키마·환경 변수는 `overview_detail.txt` 참고.
+환경 변수·선택지는 루트 `.env.example` 참고.
 
 ## 주의
 
