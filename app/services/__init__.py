@@ -106,3 +106,7 @@ __all__ = [
     "reset_memory_strategies",
 ]
 
+
+from .image_resolver import ImageResolver, get_image_resolver
+
+__all__.extend(["ImageResolver", "get_image_resolver"])

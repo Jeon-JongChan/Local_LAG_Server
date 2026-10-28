@@ -159,16 +159,26 @@ def format_citation(meta: Dict[str, Any]) -> str:
     """
     검색 결과·답변 하단에 표시할 출처 한 줄 문자열을 만듭니다.
 
-    예: "report.pdf · p.3 · bbox=[72.0, 450.0, 500.0, 480.0]"
+    예: "report.pdf · p.3~4 · bbox=[72.0, 450.0, 500.0, 480.0] · chunks=200~202"
     """
     parts = [meta.get("file_name", "unknown")]
 
-    page = meta.get("page")
-    if page is not None:
-        parts.append(f"p.{page}")
+    page_str = meta.get("page_str")
+    if page_str:
+        parts.append(page_str)
+    else:
+        page = meta.get("page")
+        if page is not None:
+            parts.append(f"p.{page}")
 
     bbox = meta.get("bbox")
     if bbox:
         parts.append(f"bbox={json.dumps(bbox)}")
+
+    chunk_ids = meta.get("chunk_ids")
+    if chunk_ids and len(chunk_ids) > 1:
+        parts.append(f"chunks={chunk_ids[0]}~{chunk_ids[-1]}")
+    elif meta.get("id") is not None:
+        parts.append(f"chunk={meta['id']}")
 
     return " · ".join(parts)

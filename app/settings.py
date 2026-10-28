@@ -74,8 +74,8 @@ PROFILE_PRESETS: Dict[str, Dict[str, Any]] = {
         "FAISS_TOP_K": 4,
         "RERANK_TOP_K": 2,
         "DOC_PARSER": "pypdf",
-        "LLAMA_NUM_PREDICT": 512,
-        "LLAMA_NUM_PREDICT_THINK": 2048,
+        "LLAMA_NUM_PREDICT": 2048,
+        "LLAMA_NUM_PREDICT_THINK": 4096,
     },
     "mid": {
         # auto: GPU(cuda) > Vulkan > CPU 순 감지
@@ -303,6 +303,10 @@ def resolve_accelerator(raw: str) -> str:
 # ---------------------------------------------------------------------------
 PROFILE = settings.profile
 
+# 환경 모드 및 디버그 플래그 (ENV=debug|prod 또는 DEBUG=true|false)
+APP_ENV = str(settings.get("APP_ENV", settings.get("ENV", "prod"))).strip().lower()
+DEBUG = settings.get_bool("DEBUG", APP_ENV in ("debug", "dev", "development"))
+
 ACCELERATOR = resolve_accelerator(str(settings.get("ACCELERATOR", "auto")))
 SERVING_ENGINE = canonical_serving_engine(str(settings.get("SERVING_ENGINE", "llama.cpp")))
 
@@ -352,9 +356,17 @@ BM25_TOP_K = settings.get_int("BM25_TOP_K", 16)
 HYBRID_RRF_K = settings.get_int("HYBRID_RRF_K", 60)
 RERANK_TOP_K = settings.get_int("RERANK_TOP_K", 4)
 HYBRID_BM25 = settings.get_bool("HYBRID_BM25", True)
+# 추론 OFF(청크 직접 출력) 시 리랭크 점수 하한. 0 이면 필터 없이 선별 청크 표시.
+RETRIEVE_MIN_SCORE = settings.get_float("RETRIEVE_MIN_SCORE", 0.0)
+# 추론/답변 시 합산하여 제공할 선별 청크 개수 (기본 3개)
+CHUNK_MERGE_COUNT = settings.get_int("CHUNK_MERGE_COUNT", 3)
+# 선별된 각 청크 기준 연속으로 묶을 청크 개수 (예: 3이면 200번 청크 선정 시 200~202번을 한 묶음으로 확장)
+CHUNK_WINDOW_SIZE = settings.get_int("CHUNK_WINDOW_SIZE", 3)
 
 DOC_PARSER = settings.get("DOC_PARSER", "opendataloader").strip().lower()
 OPENDATALOADER_FORMAT = settings.get("OPENDATALOADER_FORMAT", "json")
+SHOW_DOC_IMAGES = settings.get_bool("SHOW_DOC_IMAGES", True)
+MAX_DOC_IMAGES = settings.get_int("MAX_DOC_IMAGES", 4)
 
 CHUNK_MIN_CHARS = settings.get_int("CHUNK_MIN_CHARS", 200)
 CHUNK_MAX_CHARS = settings.get_int("CHUNK_MAX_CHARS", 800)
@@ -494,8 +506,11 @@ __all__ = [
     "HYBRID_RRF_K",
     "RERANK_TOP_K",
     "HYBRID_BM25",
+    "RETRIEVE_MIN_SCORE",
     "DOC_PARSER",
     "OPENDATALOADER_FORMAT",
+    "SHOW_DOC_IMAGES",
+    "MAX_DOC_IMAGES",
     "CHUNK_MIN_CHARS",
     "CHUNK_MAX_CHARS",
     "CHUNK_OVERLAP_CHARS",
@@ -530,6 +545,8 @@ __all__ = [
     "AIRLLM_MAX_LENGTH",
     "AIRLLM_COMPRESSION",
     "MANAGED_SERVING_ENGINES",
+    "APP_ENV",
+    "DEBUG",
     "WEB_HOST",
     "WEB_PORT",
     "active_rerank_model",

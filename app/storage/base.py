@@ -41,7 +41,9 @@ class BaseChatStore(ABC):
         pass
 
     @abstractmethod
-    def add_message(self, session_id: str, role: str, content: str) -> Dict[str, Any]:
+    def add_message(
+        self, session_id: str, role: str, content: str, images: Optional[List[Dict[str, Any]]] = None
+    ) -> Dict[str, Any]:
         """세션에 메시지 추가."""
         pass
 

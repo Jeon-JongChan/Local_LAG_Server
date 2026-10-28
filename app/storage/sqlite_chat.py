@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 import uuid
 from datetime import datetime, timezone
@@ -43,6 +44,10 @@ class SqliteChatStore(BaseChatStore):
 
     def _ensure_schema(self) -> None:
         with self._conn:
+            try:
+                self._conn.execute("ALTER TABLE chat_messages ADD COLUMN images TEXT")
+            except sqlite3.OperationalError:
+                pass
             self._conn.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS chat_sessions (
@@ -56,6 +61,7 @@ class SqliteChatStore(BaseChatStore):
                     session_id TEXT NOT NULL,
                     role TEXT NOT NULL,
                     content TEXT NOT NULL,
+                    images TEXT,
                     created_at TEXT NOT NULL,
                     FOREIGN KEY (session_id) REFERENCES chat_sessions(id) ON DELETE CASCADE
                 );
@@ -104,14 +110,25 @@ class SqliteChatStore(BaseChatStore):
     def list_messages(self, session_id: str) -> List[Dict[str, Any]]:
         rows = self._conn.execute(
             """
-            SELECT id, session_id, role, content, created_at
+            SELECT id, session_id, role, content, images, created_at
             FROM chat_messages
             WHERE session_id = ?
             ORDER BY id ASC
             """,
             (session_id,),
         ).fetchall()
-        return [dict(r) for r in rows]
+        out = []
+        for r in rows:
+            d = dict(r)
+            if d.get("images"):
+                try:
+                    d["images"] = json.loads(d["images"])
+                except Exception:
+                    d["images"] = []
+            else:
+                d["images"] = []
+            out.append(d)
+        return out
 
     def delete_session(self, session_id: str) -> bool:
         cur = self._conn.execute("SELECT id FROM chat_sessions WHERE id = ?", (session_id,))
@@ -122,17 +139,20 @@ class SqliteChatStore(BaseChatStore):
             self._conn.execute("DELETE FROM chat_sessions WHERE id = ?", (session_id,))
         return True
 
-    def add_message(self, session_id: str, role: str, content: str) -> Dict[str, Any]:
+    def add_message(
+        self, session_id: str, role: str, content: str, images: Optional[List[Dict[str, Any]]] = None
+    ) -> Dict[str, Any]:
         if role not in ("user", "assistant"):
             raise ValueError("role must be user or assistant")
         now = _utc_now()
+        images_json = json.dumps(images, ensure_ascii=False) if images else None
         with self._conn:
             cur = self._conn.execute(
                 """
-                INSERT INTO chat_messages (session_id, role, content, created_at)
-                VALUES (?, ?, ?, ?)
+                INSERT INTO chat_messages (session_id, role, content, images, created_at)
+                VALUES (?, ?, ?, ?, ?)
                 """,
-                (session_id, role, content, now),
+                (session_id, role, content, images_json, now),
             )
             if role == "user":
                 count = self._conn.execute(
@@ -153,6 +173,7 @@ class SqliteChatStore(BaseChatStore):
             "session_id": session_id,
             "role": role,
             "content": content,
+            "images": images or [],
             "created_at": now,
         }
 

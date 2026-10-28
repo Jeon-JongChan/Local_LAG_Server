@@ -19,7 +19,9 @@ from serving_engines import get_serving_adapter
 from storage import get_rag_storage, rrf_fuse
 from settings import (
     ACCELERATOR,
+    APP_ENV,
     BM25_TOP_K,
+    DEBUG,
     CHAT_HISTORY_MAX_MESSAGES,
     DOC_PARSER,
     EMBED_DEVICE,
@@ -28,6 +30,9 @@ from settings import (
     HYBRID_BM25,
     HYBRID_RRF_K,
     PROFILE,
+    RETRIEVE_MIN_SCORE,
+    CHUNK_MERGE_COUNT,
+    CHUNK_WINDOW_SIZE,
     RERANK_STRATEGY,
     active_rerank_model,
     RERANK_TOP_K,
@@ -44,6 +49,70 @@ _live_lock = threading.Lock()
 _live_lines: List[str] = []
 _live_active = False
 _last_trace: Optional[Dict[str, Any]] = None
+
+
+def expand_chunks_window(
+    hits: List[Dict[str, Any]],
+    window_size: int,
+    chunk_store: Any,
+) -> List[Dict[str, Any]]:
+    """선별된 각 청크에 대해 동일 문서 내 연속된 window_size개 청크를 묶음 처리합니다.
+
+    예: 1번 청크 id=200, window_size=3 이면 200, 201, 202번 청크를 하나의 묶음으로 확장.
+    """
+    if window_size <= 1 or not hits or chunk_store is None:
+        return hits
+
+    expanded_hits: List[Dict[str, Any]] = []
+    seen_chunk_ids: set[int] = set()
+
+    for hit in hits:
+        cid = hit.get("id")
+        if cid is None or not isinstance(cid, int):
+            expanded_hits.append(hit)
+            continue
+
+        if cid in seen_chunk_ids:
+            continue
+
+        target_ids = [cid + offset for offset in range(window_size)]
+        fetched = chunk_store.get_chunks(target_ids)
+
+        consecutive_chunks: List[Dict[str, Any]] = []
+        base_file = hit.get("file_name")
+        for tid in target_ids:
+            c = fetched.get(tid)
+            if c and c.get("file_name") == base_file:
+                consecutive_chunks.append(c)
+                seen_chunk_ids.add(tid)
+            else:
+                break
+
+        if not consecutive_chunks:
+            expanded_hits.append(hit)
+            continue
+
+        merged_hit = dict(hit)
+        merged_hit["text"] = "\n\n".join(c["text"] for c in consecutive_chunks if c.get("text"))
+        merged_hit["merged_count"] = len(consecutive_chunks)
+        merged_hit["chunk_ids"] = [c["id"] for c in consecutive_chunks]
+
+        pages = sorted({c["page"] for c in consecutive_chunks if c.get("page") is not None})
+        if pages:
+            merged_hit["pages"] = pages
+            if len(pages) == 1:
+                merged_hit["page"] = pages[0]
+                merged_hit["page_str"] = f"p.{pages[0]}"
+            elif pages[-1] - pages[0] == len(pages) - 1:
+                merged_hit["page"] = pages[0]
+                merged_hit["page_str"] = f"p.{pages[0]}~{pages[-1]}"
+            else:
+                merged_hit["page"] = pages[0]
+                merged_hit["page_str"] = f"p.{', '.join(str(p) for p in pages)}"
+
+        expanded_hits.append(merged_hit)
+
+    return expanded_hits
 
 
 def _build_context(hits: List[dict]) -> tuple[str, str]:
@@ -151,6 +220,8 @@ def get_runtime_config() -> Dict[str, Any]:
     """현재 선택된 프로필·엔진·모델 스냅샷."""
     return {
         "profile": PROFILE,
+        "app_env": APP_ENV,
+        "debug": DEBUG,
         "accelerator": ACCELERATOR,
         "serving_engine": SERVING_ENGINE,
         "embed_model": EMBED_MODEL,
@@ -160,6 +231,8 @@ def get_runtime_config() -> Dict[str, Any]:
         "doc_parser": DOC_PARSER,
         "faiss_top_k": FAISS_TOP_K,
         "rerank_top_k": RERANK_TOP_K,
+        "chunk_merge_count": CHUNK_MERGE_COUNT,
+        "chunk_window_size": CHUNK_WINDOW_SIZE,
         "hybrid_bm25": HYBRID_BM25,
     }
 
@@ -182,8 +255,12 @@ def ask_question_detailed(
     *,
     think_mode: str = "instant",
     history: Optional[List[dict]] = None,
+    reason: bool = True,
 ) -> Tuple[str, Dict[str, Any]]:
-    """답변과 구간별 성능 트레이스를 함께 반환."""
+    """답변과 구간별 성능 트레이스를 함께 반환.
+
+    reason=False 면 LLM 을 호출하지 않고 리랭크로 고른 청크 원문(+이미지)을 그대로 반환한다.
+    """
     question = question.strip()
     t_all = time.perf_counter()
     stages: List[Dict[str, Any]] = []
@@ -270,7 +347,8 @@ def ask_question_detailed(
             return answer, trace
 
         # --- rerank ---
-        if RERANK_TOP_K <= 0:
+        target_rerank_k = max(RERANK_TOP_K, CHUNK_MERGE_COUNT)
+        if target_rerank_k <= 0:
             hits = candidates
             stages.append({
                 "id": "rerank",
@@ -281,35 +359,81 @@ def ask_question_detailed(
             })
             _qlog("2/3 리랭크", f"skip · 후보 {len(hits)}개")
         else:
-            _qlog("2/3 리랭크", f"전략={RERANK_STRATEGY} · {len(candidates)} -> top {RERANK_TOP_K}")
+            _qlog("2/3 리랭크", f"전략={RERANK_STRATEGY} · {len(candidates)} -> top {target_rerank_k}")
             t2 = time.perf_counter()
             try:
                 reranker = get_reranker_adapter()
-                hits = reranker.rerank(search_text, candidates, top_k=RERANK_TOP_K)
+                hits = reranker.rerank(search_text, candidates, top_k=target_rerank_k)
                 backend = getattr(reranker, "backend_name", RERANK_STRATEGY)
             except Exception as exc:
                 _qlog("2/3 리랭크", f"경고: 리랭커 실패 ({exc}) - 검색 후보군을 그대로 사용합니다.")
-                hits = list(candidates[:RERANK_TOP_K])
+                hits = list(candidates[:target_rerank_k])
                 backend = f"{RERANK_STRATEGY}(fallback)"
 
             rerank_s = _round_s(t2)
-            stages.append({
+            rerank_stage: Dict[str, Any] = {
                 "id": "rerank",
                 "label": "리랭크",
                 "model": f"{backend} / {active_rerank_model()}",
                 "detail": f"{len(candidates)} → {len(hits)}",
                 "s": rerank_s,
-            })
+            }
+            if DEBUG:
+                rerank_stage["hits"] = [
+                    {
+                        "rank": rank,
+                        "score": round(float(h.get("score", 0.0)), 4) if "score" in h else None,
+                        "citation": format_citation(h),
+                        "doc_id": h.get("doc_id"),
+                        "page": h.get("page"),
+                        "snippet": (h.get("text", "") or "").replace("\n", " ")[:160],
+                    }
+                    for rank, h in enumerate(hits, start=1)
+                ]
+            stages.append(rerank_stage)
             _qlog("2/3 리랭크", f"완료 {rerank_s}s · 선별 {len(hits)}개")
+            if DEBUG:
+                _qlog("2/3 리랭크 [DEBUG]", f"선별된 {len(hits)}개 청크 상세:")
+                for rank, hit in enumerate(hits, start=1):
+                    score_str = f"score={hit.get('score', 0.0):.4f}" if "score" in hit else "score=N/A"
+                    cite = format_citation(hit)
+                    snippet = (hit.get("text", "") or "").replace("\n", " ")[:100]
+                    _qlog("2/3 리랭크 [DEBUG]", f"  #{rank} [{score_str}] {cite} | {snippet}...")
 
-        context, ref_text = _build_context(hits)
+        # 1) 리랭크 점수 하한선 필터링
+        if RETRIEVE_MIN_SCORE > 0:
+            filtered = [h for h in hits if h.get("rerank_score", 1.0) >= RETRIEVE_MIN_SCORE]
+            base_hits = filtered if filtered else hits[:1]
+        else:
+            base_hits = hits
+
+        # 2) 각 선별 청크 기준 연속 N개 청크 묶음 처리 (예: 200번 선정 시 200~202번 한 묶음)
+        bundle_hits = expand_chunks_window(base_hits, CHUNK_WINDOW_SIZE, store.chunk_store)
+        if CHUNK_WINDOW_SIZE > 1:
+            _qlog("청크 묶음", f"연속 윈도우={CHUNK_WINDOW_SIZE} 적용 · 선별 {len(bundle_hits)}개 묶음 확장 완료")
+
+        context, ref_text = _build_context(bundle_hits)
+
+        from services.image_resolver import get_image_resolver
+        matched_images = get_image_resolver().resolve_images_for_hits(bundle_hits)
+        trace["images"] = matched_images
+        if matched_images:
+            _qlog("이미지", f"관련 이미지 {len(matched_images)}건 매핑 완료")
+
+        if not reason:
+            # 추론 OFF: 각 묶음 청크 원문 출력
+            blocks = [f"[{i}] {format_citation(h)}\n{h['text']}" for i, h in enumerate(bundle_hits, start=1)]
+            _qlog("청크 출력", f"추론 생략 · 선별 {len(bundle_hits)}개 묶음 원문 표시 (CHUNK_WINDOW_SIZE={CHUNK_WINDOW_SIZE})")
+            trace["total_s"] = _round_s(t_all)
+            _push_trace(trace)
+            return "\n\n---\n\n".join(blocks) + f"\n\n[참고 문서]\n{ref_text}", trace
 
         # --- llm ---
         serving_engine = get_serving_adapter()
         _, _, mode_label = serving_engine.resolve_think_mode(question, think_mode=think_mode)
         eng = getattr(serving_engine, "engine_type", SERVING_ENGINE)
         model_name = getattr(serving_engine, "model_name", None) or "(서버 기본)"
-        _qlog("3/3 LLM", f"엔진={eng} ({serving_engine.base_url}) · mode={mode_label}")
+        _qlog("3/3 LLM", f"엔진={eng} ({serving_engine.base_url}) · mode={mode_label} · 선별 묶음 {len(bundle_hits)}개 주입")
 
         try:
             if eng in MANAGED_SERVING_ENGINES:

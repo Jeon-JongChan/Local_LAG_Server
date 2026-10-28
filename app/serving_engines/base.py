@@ -20,8 +20,9 @@ _THINK_KEYWORDS = (
 )
 
 _SYSTEM_PROMPT = """당신은 주어진 [참고 문서]를 바탕으로 사용자의 질문에 정확하게 답변하는 전문 AI 도우미입니다.
-반드시 제공된 [참고 문서]의 내용에 근거하여 사용자의 질문과 동일한 언어로 명확하고 간결하게 답변하세요.
-문서에 없는 내용은 추측하지 말고 솔직하게 모른다고 답하세요."""
+반드시 제공된 [참고 문서]의 내용에 근거하여 한국어로 명확하고 충분하게 설명하여 답변하세요.
+답변 작성 시 마크다운 강조 기호(**)를 사용하지 마세요. 목록이나 키워드는 ** 없이 일반 텍스트나 번호/하이픈으로만 깔끔하게 작성하세요.
+사고 과정(Thinking Process)을 거칠 때도 반드시 한국어로만 생각하고, 문서에 없는 내용은 추측하지 말고 솔직하게 모른다고 답하세요."""
 
 
 class BaseServingAdapter(ABC):
@@ -78,7 +79,7 @@ class BaseServingAdapter(ABC):
 
         system_text = _SYSTEM_PROMPT
         if not use_think:
-            system_text += "\n생각 과정(<think>)을 생략하고 곧바로 최종 답변만 간결하고 명확하게 출력하세요."
+            system_text += "\n사고 과정(Thinking Process)을 절대 거치지 말고, 곧바로 최종 답변만 한국어로 핵심 내용을 충분하고 명확하게 설명하여 출력하세요."
 
         messages: List[Dict[str, str]] = [{"role": "system", "content": system_text}]
         if history:
@@ -113,19 +114,22 @@ class BaseServingAdapter(ABC):
         return self._clean_output(raw_output)
 
     def _clean_output(self, text: str) -> str:
-        """답변 텍스트 공통 정제 (태그 닫힘 등)."""
+        """답변 텍스트 공통 정제 (태그 닫힘, 불필요한 마크다운 볼드 제거 등)."""
         out = text.strip()
         if "</think>" in out:
             after = out.split("</think>")[-1].strip()
-            if after:
-                return after
-            return re.sub(r"</?think>", "", out).strip()
-
-        if "<think>" in out and "</think>" not in out:
+            out = after if after else re.sub(r"</?think>", "", out).strip()
+        elif "<think>" in out and "</think>" not in out:
             # 닫는 태그 없이 끊긴 경우: 전체 삭제로 인한 0자 응답을 방지하고 태그 머리만 제거
-            return re.sub(r"^<think>\s*", "", out).strip()
+            out = re.sub(r"^<think>\s*", "", out).strip()
 
-        return out
+        # 코드 블록(``` 및 `) 내부를 제외한 일반 텍스트에서 불필요한 ** 기호 제거
+        parts = re.split(r"(```[\s\S]*?```|`[^`\n]+`)", out)
+        cleaned_parts = [
+            part if i % 2 == 1 else part.replace("**", "")
+            for i, part in enumerate(parts)
+        ]
+        return "".join(cleaned_parts).strip()
 
     @abstractmethod
     def _call_engine(self, messages: List[Dict[str, str]], options: Dict[str, Any]) -> str:

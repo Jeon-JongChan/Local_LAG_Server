@@ -121,6 +121,12 @@ class EmbeddingAdapter:
             "127.0.0.1",
             "-ngl",
             str(ngl),
+            "-c",
+            "4096",
+            "-b",
+            "4096",
+            "-ub",
+            "4096",
         ]
         print(f"[embedding-gguf] GGUF 임베딩 서버 기동 중 (포트 {self._port}): {' '.join(cmd)}", flush=True)
         popen_kw: dict = {"stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
@@ -150,16 +156,21 @@ class EmbeddingAdapter:
     def _post_gguf_embeddings(self, inputs: List[str]) -> List[List[float]]:
         self._ensure_gguf_server()
         url = f"{self._base_url}/v1/embeddings"
-        payload = json.dumps({"input": inputs, "model": self.model_name}).encode("utf-8")
-        req = urllib.request.Request(
-            url,
-            data=payload,
-            headers={"Content-Type": "application/json"},
-        )
-        with urllib.request.urlopen(req, timeout=120.0) as res:
-            data = json.loads(res.read().decode("utf-8"))
-        items = sorted(data.get("data", []), key=lambda x: x.get("index", 0))
-        return [it["embedding"] for it in items]
+        sub_batch_size = 4
+        all_embeddings: List[List[float]] = []
+        for i in range(0, len(inputs), sub_batch_size):
+            sub_inputs = inputs[i : i + sub_batch_size]
+            payload = json.dumps({"input": sub_inputs, "model": self.model_name}).encode("utf-8")
+            req = urllib.request.Request(
+                url,
+                data=payload,
+                headers={"Content-Type": "application/json"},
+            )
+            with urllib.request.urlopen(req, timeout=120.0) as res:
+                data = json.loads(res.read().decode("utf-8"))
+            items = sorted(data.get("data", []), key=lambda x: x.get("index", 0))
+            all_embeddings.extend([it["embedding"] for it in items])
+        return all_embeddings
 
     # --- 핵심 임베딩 오버라이드 지점 ---
     def _embed_single_query(self, query: str) -> np.ndarray:

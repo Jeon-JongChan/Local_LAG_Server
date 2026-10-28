@@ -56,3 +56,5 @@ Thumbs.db
 
 # Graphify
 .graphify/
+
+.tools/.graphify/

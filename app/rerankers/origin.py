@@ -42,8 +42,9 @@ class _QwenCausalScorer:
         if self.tokenizer.pad_token_id is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
 
+        dtype = torch.float16 if device == "cuda" else torch.float32
         self.model = AutoModelForCausalLM.from_pretrained(
-            str(local_dir), trust_remote_code=True
+            str(local_dir), torch_dtype=dtype, trust_remote_code=True
         ).to(device).eval()
 
         self.token_false_id = self.tokenizer.convert_tokens_to_ids("no")

@@ -6,13 +6,19 @@ const { createApp, ref, computed, nextTick, onMounted } = Vue;
 
 const REF_MARKER = "\n\n[참고 문서]\n";
 
+function stripMarkdownBold(text) {
+  if (!text || !text.includes("**")) return text;
+  return text
+    .split(/(```[\s\S]*?```|`[^`\n]+`)/)
+    .map((part, i) => (i % 2 === 1 ? part : part.replaceAll("**", "")))
+    .join("");
+}
+
 function parseAssistantContent(text) {
   const idx = text.indexOf(REF_MARKER);
-  if (idx === -1) {
-    return { body: text, refs: [] };
-  }
-  const body = text.slice(0, idx).trim();
-  const refs = text
+  let rawBody = idx === -1 ? text : text.slice(0, idx).trim();
+  const body = stripMarkdownBold(rawBody);
+  const refs = idx === -1 ? [] : text
     .slice(idx + REF_MARKER.length)
     .split("\n")
     .map((line) => line.trim())
@@ -29,12 +35,26 @@ createApp({
     const input = ref("");
     const thinkMode = ref("instant");
     const useHistory = ref(false);
+    const reason = ref(false);
     const loading = ref(false);
     const liveLines = ref([]);
     let liveTimer = null;
+    let sessionCheckTimer = null;
     const sidebarOpen = ref(window.innerWidth > 768);
     const messagesEl = ref(null);
     const inputEl = ref(null);
+    const modalImageUrl = ref(null);
+    const modalImageCaption = ref("");
+
+    function openImageModal(url, caption = "") {
+      modalImageUrl.value = url;
+      modalImageCaption.value = caption;
+    }
+
+    function closeImageModal() {
+      modalImageUrl.value = null;
+      modalImageCaption.value = "";
+    }
 
     const hints = [
       "DCU 구매규격 요약해줘",
@@ -48,6 +68,7 @@ createApp({
     });
 
     const loadingLabel = computed(() => {
+      if (!reason.value) return "임베딩 · 리랭크 · 청크 선별…";
       if (thinkMode.value === "think") {
         return "임베딩 · 리랭크 · Thinking…";
       }
@@ -82,12 +103,50 @@ createApp({
       sessions.value = data.sessions || [];
     }
 
+    function stopSessionPoll() {
+      clearInterval(sessionCheckTimer);
+      sessionCheckTimer = null;
+    }
+
+    function startSessionPoll(sid) {
+      stopSessionPoll();
+      sessionCheckTimer = setInterval(async () => {
+        if (currentSessionId.value !== sid) {
+          stopSessionPoll();
+          return;
+        }
+        try {
+          const data = await api("GET", `/api/sessions/${sid}`);
+          if (currentSessionId.value !== sid) return;
+          if (!data.generating) {
+            stopSessionPoll();
+            stopLivePoll();
+            loading.value = false;
+            messages.value = data.messages || [];
+            await scrollBottom();
+          }
+        } catch {
+          /* 주기적 재시도 */
+        }
+      }, 1500);
+    }
+
     async function selectSession(id) {
+      stopSessionPoll();
       currentSessionId.value = id;
       const data = await api("GET", `/api/sessions/${id}`);
       messages.value = data.messages || [];
       if (window.innerWidth <= 768) sidebarOpen.value = false;
       await scrollBottom();
+
+      if (data.generating) {
+        loading.value = true;
+        startLivePoll();
+        startSessionPoll(id);
+      } else {
+        loading.value = false;
+        stopLivePoll();
+      }
     }
 
     async function newChat() {
@@ -187,19 +246,36 @@ createApp({
           content: text,
           think_mode: thinkMode.value,
           use_history: useHistory.value,
+          reason: reason.value,
         });
 
-        const idx = sessions.value.findIndex((s) => s.id === sid);
-        if (idx >= 0) {
-          sessions.value[idx] = data.session;
-          const [updated] = sessions.value.splice(idx, 1);
-          sessions.value.unshift(updated);
+        // 세션 목록 순서 및 제목 갱신
+        if (data.session) {
+          const idx = sessions.value.findIndex((s) => s.id === sid);
+          if (idx >= 0) {
+            sessions.value[idx] = data.session;
+            const [updated] = sessions.value.splice(idx, 1);
+            sessions.value.unshift(updated);
+          }
         }
 
-        messages.value = messages.value.filter((m) => !String(m.id).startsWith("tmp-"));
-        messages.value.push(data.user_message, data.assistant_message);
-        await scrollBottom();
+        // 사용자가 아직 해당 채팅방에 머물러 있는 경우에만 현재 화면 갱신
+        if (currentSessionId.value === sid) {
+          messages.value = messages.value.filter((m) => !String(m.id).startsWith("tmp-"));
+          if (data.user_message && data.assistant_message) {
+            messages.value.push(data.user_message, data.assistant_message);
+          }
+          await scrollBottom();
+        }
       } catch (err) {
+        // 사용자가 방을 이동하여 요청이 취소된 경우 에러 메시지를 띄우지 않고 백그라운드 완료에 맡김
+        if (currentSessionId.value) {
+          const data = await api("GET", `/api/sessions/${currentSessionId.value}`).catch(() => null);
+          if (data && data.generating) {
+            startSessionPoll(currentSessionId.value);
+            return;
+          }
+        }
         messages.value.push({
           id: "err-" + Date.now(),
           role: "assistant",
@@ -207,13 +283,20 @@ createApp({
         });
         await scrollBottom();
       } finally {
-        stopLivePoll();
-        loading.value = false;
+        if (!sessionCheckTimer) {
+          stopLivePoll();
+          loading.value = false;
+        }
         await nextTick(() => inputEl.value?.focus());
       }
     }
 
     onMounted(async () => {
+      window.addEventListener("keydown", (e) => {
+        if (e.key === "Escape" && modalImageUrl.value) {
+          closeImageModal();
+        }
+      });
       try {
         await loadSessions();
         if (sessions.value.length) {
@@ -232,6 +315,7 @@ createApp({
       input,
       thinkMode,
       useHistory,
+      reason,
       loading,
       loadingLabel,
       liveLines,
@@ -248,6 +332,10 @@ createApp({
       onKeydown,
       resizeInput,
       useHint,
+      modalImageUrl,
+      modalImageCaption,
+      openImageModal,
+      closeImageModal,
     };
   },
 }).mount("#app");

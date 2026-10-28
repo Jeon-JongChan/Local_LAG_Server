@@ -80,6 +80,22 @@
                   <li v-for="(ref, i) in parsed(msg).refs" :key="i">{{ ref }}</li>
                 </ul>
               </details>
+              <details v-if="msg.images && msg.images.length" class="doc-images" open>
+                <summary>관련 이미지 / 도표 {{ msg.images.length }}건</summary>
+                <div class="image-gallery">
+                  <div
+                    v-for="(img, idx) in msg.images"
+                    :key="idx"
+                    class="image-card"
+                    @click="openImageModal(img.url, img.caption || (img.file_name + ' p.' + img.page))"
+                  >
+                    <div class="image-thumb-wrapper">
+                      <img :src="img.url" :alt="img.caption || '문서 이미지'" loading="lazy" />
+                    </div>
+                    <span class="image-caption">{{ img.caption || (img.file_name + ' (p.' + img.page + ')') }}</span>
+                  </div>
+                </div>
+              </details>
             </div>
           </article>
 
@@ -121,6 +137,10 @@
               </button>
             </div>
             <div class="composer-tools">
+              <label class="history-toggle" title="켜면 챗봇(LLM)이 답변 생성, 끄면 선별된 청크 원문만 표시">
+                <input type="checkbox" v-model="reason" :disabled="loading" />
+                <span>추론</span>
+              </label>
               <label class="history-toggle" title="이전 대화를 검색·LLM에 포함">
                 <input type="checkbox" v-model="useHistory" :disabled="loading" />
                 <span>이전 대화 이력 포함</span>
@@ -140,6 +160,14 @@
           </form>
         </footer>
       </main>
+      <!-- 이미지 확대 모달 -->
+      <div v-if="modalImageUrl" class="image-modal-backdrop" @click="closeImageModal">
+        <div class="image-modal-content" @click.stop>
+          <button type="button" class="btn-close-modal" @click="closeImageModal" title="닫기 (ESC)">×</button>
+          <img :src="modalImageUrl" :alt="modalImageCaption" />
+          <div v-if="modalImageCaption" class="modal-caption">{{ modalImageCaption }}</div>
+        </div>
+      </div>
     </div>
   </div>
   <script src="/static/app.js"></script>

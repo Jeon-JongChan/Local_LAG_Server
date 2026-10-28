@@ -113,6 +113,7 @@ class OpenAICompatibleServingAdapter(BaseServingAdapter):
             "max_tokens": max_tokens,
             "stream": False,
             "stop": ["<|im_end|>", "<|endoftext|>", "</s>"],
+            "chat_template_kwargs": {"enable_thinking": bool(use_think)},
         }
         if self.model_name:
             payload["model"] = self.model_name
